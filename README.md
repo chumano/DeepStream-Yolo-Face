@@ -1,9 +1,11 @@
 # DeepStream-Yolo-Face
 
-NVIDIA DeepStream SDK application for YOLO-Face models
+NVIDIA DeepStream SDK 8.0 / 7.1 / 7.0 / 6.4 / 6.3 / 6.2 / 6.1.1 / 6.1 / 6.0.1 / 6.0 application for YOLO-Face models
 
 --------------------------------------------------------------------------------------------------
-### YOLO objetct detection models and other infos: https://github.com/marcoslucianops/DeepStream-Yolo
+### YOLO object detection models and other infos: https://github.com/marcoslucianops/DeepStream-Yolo
+--------------------------------------------------------------------------------------------------
+### Important: Please export the ONNX model with the new export file, generate the TensorRT engine again with the updated files, and use the new config_infer_primary file according to your model
 --------------------------------------------------------------------------------------------------
 
 ### Getting started
@@ -35,57 +37,42 @@ git clone https://github.com/marcoslucianops/DeepStream-Yolo-Face.git
 cd DeepStream-Yolo-Face
 ```
 
-#### 2. Compile the libs
+#### 3. Compile the libs
 
-Export the CUDA_VER env according to your DeepStream version and platform:
-
-* DeepStream 6.3 on x86 platform
-
-  ```
-  export CUDA_VER=12.1
-  ```
-
-* DeepStream 6.2 on x86 platform
-
-  ```
-  export CUDA_VER=11.8
-  ```
-
-* DeepStream 6.1.1 on x86 platform
-
-  ```
-  export CUDA_VER=11.7
-  ```
-
-* DeepStream 6.1 on x86 platform
-
-  ```
-  export CUDA_VER=11.6
-  ```
-
-* DeepStream 6.0.1 / 6.0 on x86 platform
-
-  ```
-  export CUDA_VER=11.4
-  ```
-
-* DeepStream 6.3 / 6.2 / 6.1.1 / 6.1 on Jetson platform
-
-  ```
-  export CUDA_VER=11.4
-  ```
-
-* DeepStream 6.0.1 / 6.0 on Jetson platform
-
-  ```
-  export CUDA_VER=10.2
-  ```
-
-Compile the libs
+3.1. Set the `CUDA_VER` according to your DeepStream version
 
 ```
-make -C nvdsinfer_custom_impl_Yolo_face
-make
+export CUDA_VER=XY.Z
+```
+
+* x86 platform
+
+  ```
+  DeepStream 8.0 = 12.8
+  DeepStream 7.1 = 12.6
+  DeepStream 7.0 / 6.4 = 12.2
+  DeepStream 6.3 = 12.1
+  DeepStream 6.2 = 11.8
+  DeepStream 6.1.1 = 11.7
+  DeepStream 6.1 = 11.6
+  DeepStream 6.0.1 / 6.0 = 11.4
+  ```
+
+* Jetson platform
+
+  ```
+  DeepStream 8.0 = 13.0
+  DeepStream 7.1 = 12.6
+  DeepStream 7.0 / 6.4 = 12.2
+  DeepStream 6.3 / 6.2 / 6.1.1 / 6.1 = 11.4
+  DeepStream 6.0.1 / 6.0 = 10.2
+  ```
+
+3.2. Make the libs
+
+```
+make -C nvdsinfer_custom_impl_Yolo_face clean && make -C nvdsinfer_custom_impl_Yolo_face
+make clean && make
 ```
 
 **NOTE**: To use the Python code, you need to install the DeepStream Python bindings.
@@ -96,20 +83,18 @@ Reference: https://github.com/NVIDIA-AI-IOT/deepstream_python_apps
 * x86 platform: 
 
   ```
-  wget https://github.com/NVIDIA-AI-IOT/deepstream_python_apps/releases/download/v1.1.8/pyds-1.1.8-py3-none-linux_x86_64.whl
-  pip3 install pyds-1.1.8-py3-none-linux_x86_64.whl
+  pip3 install https://github.com/NVIDIA-AI-IOT/deepstream_python_apps/releases/download/v1.2.2/pyds-1.2.2-cp312-cp312-linux_x86_64.whl
   ```
 
 * Jetson platform:
 
   ```
-  wget https://github.com/NVIDIA-AI-IOT/deepstream_python_apps/releases/download/v1.1.8/pyds-1.1.8-py3-none-linux_aarch64.whl
-  pip3 install pyds-1.1.8-py3-none-linux_aarch64.whl
+  pip3 install https://github.com/NVIDIA-AI-IOT/deepstream_python_apps/releases/download/v1.2.2/pyds-1.2.2-cp312-cp312-linux_aarch64.whl
   ```
 
 **NOTE**: It is recommended to use Python virtualenv.
 
-**NOTE**: The steps above only work on **DeepStream 6.3**. For previous versions, please check the files on the `NVIDIA-AI-IOT/deepstream_python_apps` repo.
+**NOTE**: The steps above only work on **DeepStream 8.0**. For previous versions, please check the files on the `NVIDIA-AI-IOT/deepstream_python_apps` repo.
 
 #### 3. Run
 
@@ -134,11 +119,11 @@ Reference: https://github.com/NVIDIA-AI-IOT/deepstream_python_apps
 --source file:// or rtsp:// or http://
 ```
 
-**NOTE**: To change the config infer file (example for config_infer.txt file)
+**NOTE**: To change the infer config file (example for config_infer.txt file)
 
 ```
 -c config_infer.txt
---config-infer config_infer.txt
+--infer-config config_infer.txt
 ```
 
 **NOTE**: To change the nvstreammux batch-size (example for 2; default: 1)
@@ -169,13 +154,6 @@ Reference: https://github.com/NVIDIA-AI-IOT/deepstream_python_apps
 --gpu-id 1
 ```
 
-**NOTE**: To change the FPS measurement interval (example for 10; default: 5)
-
-```
--f 10
---fps-interval 10
-```
-
 ##
 
 ### NMS configuration
@@ -191,7 +169,6 @@ For now, the `nms-iou-threshold` is fixed to `0.45`.
 ```
 [class-attrs-all]
 pre-cluster-threshold=0.25
-topk=300
 ```
 
 ##
