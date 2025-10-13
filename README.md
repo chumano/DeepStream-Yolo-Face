@@ -37,9 +37,9 @@ git clone https://github.com/marcoslucianops/DeepStream-Yolo-Face.git
 cd DeepStream-Yolo-Face
 ```
 
-#### 3. Compile the libs
+#### 2. Compile the libs
 
-3.1. Set the `CUDA_VER` according to your DeepStream version
+2.1. Set the `CUDA_VER` according to your DeepStream version
 
 ```
 export CUDA_VER=XY.Z
@@ -68,7 +68,7 @@ export CUDA_VER=XY.Z
   DeepStream 6.0.1 / 6.0 = 10.2
   ```
 
-3.2. Make the libs
+2.2. Make the libs
 
 ```
 make -C nvdsinfer_custom_impl_Yolo_face clean && make -C nvdsinfer_custom_impl_Yolo_face
@@ -152,6 +152,16 @@ Reference: https://github.com/NVIDIA-AI-IOT/deepstream_python_apps
 ```
 -g 1
 --gpu-id 1
+```
+
+**NOTE**: The **DeepStream-Yolo-Face** requires
+
+```
+[property]
+...
+maintain-aspect-ratio=1
+symmetric-padding=1
+...
 ```
 
 ##
