@@ -3,6 +3,15 @@ import onnx
 import torch
 import torch.nn as nn
 from copy import deepcopy
+from importlib import reload
+
+# https://github.com/suno-ai/bark/issues/626
+original_load = torch.load
+def patched_load(*args, **kwargs):
+    kwargs['weights_only'] = False
+    return original_load(*args, **kwargs)
+torch.load = patched_load
+
 
 from ultralytics import YOLO
 from ultralytics.nn.modules import C2f, Detect, RTDETRDecoder

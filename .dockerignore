@@ -1,0 +1,56 @@
+# Git
+.git
+.gitignore
+
+# Build artifacts
+*.o
+*.so
+deepstream
+*.engine
+*.onnx
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Documentation
+*.md
+!README.md
+docs/
+
+# Models (mount separately)
+models/
+*.weights
+*.pt
+*.pth
+
+# Outputs
+outputs/
+*.mp4
+*.avi
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+.Python
+env/
+venv/
+.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+temp/

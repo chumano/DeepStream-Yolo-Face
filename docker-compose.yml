@@ -1,0 +1,70 @@
+
+services:
+  deepstream-yolo-face:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        DEEPSTREAM_VERSION: "7.1"
+    image: deepstream-yolo-face:latest
+    container_name: deepstream-yolo-face
+    
+    privileged: true
+    # GPU access
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, video, compute, utility]
+    
+    # Environment variables
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - DISPLAY=${DISPLAY:-:0}
+      #- QT_X11_NO_MITSHM=1
+      - CUDA_VISIBLE_DEVICES=0
+    
+    # For GUI display (X11 forwarding)
+    volumes:
+      - /usr/lib/wsl/lib/:/usr/lib/wsl/lib/:ro # For WSL2 (adjust as needed)
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ./models:/app/models:rw
+      - ./outputs:/app/outputs:rw
+      # Mount video files directory (adjust path as needed)
+      - ./videos:/app/videos:ro
+      - ./deepstream.py:/app/DeepStream-Yolo-Face/deepstream.py:ro
+      - ./tests:/app/DeepStream-Yolo-Face/tests:ro
+    
+    # Network mode for RTSP streams
+    network_mode: host
+    
+    # Interactive mode
+    stdin_open: true
+    tty: true
+    
+    # Shared memory for GStreamer
+    shm_size: "2gb"
+    
+    
+    # Working directory
+    working_dir: /app/DeepStream-Yolo-Face
+    
+    # Default command - override with docker-compose run
+    command: >
+       python3 deepstream.py 
+       -s file:///opt/nvidia/deepstream/deepstream/samples/streams/sample_1080p_h264.mp4 
+       -c config_infer_primary_yoloV8_face.txt
+
+  # Development service with shell access
+  dev:
+    extends:
+      service: deepstream-yolo-face
+    container_name: deepstream-yolo-face-dev
+    profiles:
+      - dev
+    entrypoint: ["tail", "-f", "/dev/null"]
+    command: []

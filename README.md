@@ -184,3 +184,16 @@ pre-cluster-threshold=0.25
 ##
 
 My projects: https://www.youtube.com/MarcosLucianoTV
+
+## Video preparation
+
+Splitting a video into multiple segments for testing:
+
+```bash
+ffmpeg -i ./videos/friends.mp4 -c copy -map 0 -segment_time 600 -f segment ./videos/friends_video_%03d.mp4
+```
+
+Copy videos from docker container to host:
+```bash
+docker cp deepstream-yolo-face-dev:/opt/nvidia/deepstream/deepstream/samples/streams/sample_1080p_h264.mp4 ./videos
+```

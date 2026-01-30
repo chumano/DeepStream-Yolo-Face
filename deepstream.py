@@ -251,54 +251,61 @@ def is_aarch64():
 
 
 def main():
+    print(os.environ.get("LD_LIBRARY_PATH"))
+    print(os.environ.get("GST_PLUGIN_PATH"))
     Gst.init(None)
 
     loop = GLib.MainLoop()
-
-    pipeline = Gst.Pipeline()
+    
+    pipeline = Gst.Pipeline.new("pipeline")
     if not pipeline:
         sys.stderr.write("ERROR - Failed to create pipeline\n")
         return -1
 
     nvstreammux = Gst.ElementFactory.make("nvstreammux", "nvstreammux")
-    if not nvstreammux or not pipeline.add(nvstreammux):
+    if not nvstreammux:
         sys.stderr.write("ERROR - Failed to create nvstreammux\n")
         return -1
+    print("Created nvstreammux")
 
+    if pipeline.add(nvstreammux):
+        sys.stderr.write("ERROR - Failed to add nvstreammux to pipeline\n")
+        return -1
+    
     uridecodebin = create_uridecodebin(0, SOURCE, nvstreammux)
-    if not uridecodebin or not pipeline.add(uridecodebin):
+    if not uridecodebin or pipeline.add(uridecodebin):
         sys.stderr.write("ERROR - Failed to create uridecodebin\n")
         return -1
 
     nvinfer = Gst.ElementFactory.make("nvinfer", "nvinfer")
-    if not nvinfer or not pipeline.add(nvinfer):
+    if not nvinfer or pipeline.add(nvinfer):
         sys.stderr.write("ERROR - Failed to create nvinfer\n")
         return -1
 
     nvvidconv = Gst.ElementFactory.make("nvvideoconvert", "nvvideoconvert")
-    if not nvvidconv or not pipeline.add(nvvidconv):
+    if not nvvidconv or pipeline.add(nvvidconv):
         sys.stderr.write("ERROR - Failed to create nvvideoconvert\n")
         return -1
 
     capsfilter = Gst.ElementFactory.make("capsfilter", "capsfilter")
-    if not capsfilter or not pipeline.add(capsfilter):
+    if not capsfilter or pipeline.add(capsfilter):
         sys.stderr.write("ERROR - Failed to create capsfilter\n")
         return -1
 
     nvosd = Gst.ElementFactory.make("nvdsosd", "nvdsosd")
-    if not nvosd or not pipeline.add(nvosd):
+    if not nvosd or pipeline.add(nvosd):
         sys.stderr.write("ERROR - Failed to create nvdsosd\n")
         return -1
 
     nvsink = None
     if JETSON:
         nvsink = Gst.ElementFactory.make("nv3dsink", "nv3dsink")
-        if not nvsink or not pipeline.add(nvsink):
+        if not nvsink or pipeline.add(nvsink):
             sys.stderr.write("ERROR - Failed to create nv3dsink\n")
             return -1
     else:
         nvsink = Gst.ElementFactory.make("nveglglessink", "nveglglessink")
-        if not nvsink or not pipeline.add(nvsink):
+        if not nvsink or pipeline.add(nvsink):
             sys.stderr.write("ERROR - Failed to create nveglglessink\n")
             return -1
 
@@ -320,7 +327,7 @@ def main():
     nvstreammux.set_property("live-source", 1)
     nvinfer.set_property("config-file-path", INFER_CONFIG)
     nvinfer.set_property("qos", 0)
-    nvosd.set_property("process-mode", int(pyds.MODE_GPU))
+    nvosd.set_property("process-mode", 1)  # GPU process mode
     nvosd.set_property("qos", 0)
     nvsink.set_property("async", 0)
     nvsink.set_property("sync", 0)
@@ -330,10 +337,10 @@ def main():
         nvstreammux.set_property("live-source", 0)
 
     if not JETSON:
-        nvstreammux.set_property("nvbuf-memory-type", int(pyds.NVBUF_MEM_CUDA_DEVICE))
+        nvstreammux.set_property("nvbuf-memory-type", 1)
         nvstreammux.set_property("gpu_id", GPU_ID)
         nvinfer.set_property("gpu_id", GPU_ID)
-        nvvidconv.set_property("nvbuf-memory-type", int(pyds.NVBUF_MEM_CUDA_DEVICE))
+        nvvidconv.set_property("nvbuf-memory-type", 1)
         nvvidconv.set_property("gpu_id", GPU_ID)
         nvosd.set_property("gpu_id", GPU_ID)
 

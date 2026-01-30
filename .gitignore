@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+
+# Temporary files
+temp/
+
+# Log files
+*.log
+
+# Models and outputs
+models
+!models/yolov8n-face.pt
+!models/yolov8n-face.onnx
+
+outputs
+videos
+!videos/friends_short.mp4

@@ -1,5 +1,5 @@
 # YOLOv8-Face usage
-
+Ubuntu 22.04 : `wsl -d Ubuntu`
 **NOTE**: The yaml file is not required.
 
 * [Convert model](#convert-model)
@@ -11,13 +11,34 @@
 ### Convert model
 
 #### 1. Download the YOLOv8-Face repo and install the requirements
+pip install torch --dry-run --report -
+curl -s https://pypi.org/pypi/torch/json
 
-```
+```bash
 git clone https://github.com/derronqi/yolov8-face.git
 cd yolov8-face
 pip3 install -r requirements.txt
 python3 setup.py install
 pip3 install onnx onnxslim onnxruntime
+pip3 install onnx==1.12.0 # supported OPS version 17
+pip3 install onnxruntime==1.13.1 onnxslim==0.1.82 onnxscript==0.5.7
+pip3 install torch==2.1.2
+# For more details, visit https://onnxruntime.ai/docs/reference/compatibility.html
+
+# pip freeze > requirements.txt
+# apt-get remove libprotobuf-dev protobuf-compiler
+```
+requirements.txt file:
+```
+matplotlib>=3.2.2 # for plotting results
+numpy>=1.21.6,<2.0.0 # array computing
+opencv-python>=4.6.0 # image/video processing
+Pillow>=7.1.2 # image processing
+PyYAML>=5.3.1 # config file parsing
+requests>=2.23.0 # HTTP requests
+scipy>=1.4.1 # scientific computing
+torch>=1.7.0,<2.0.0 # tensor computing
+torchvision>=0.8.1,<0.16.0 # vision utils
 ```
 
 **NOTE**: It is recommended to use Python virtualenv.
@@ -36,13 +57,14 @@ Download the `pt` file from [YOLOv8-Face](https://github.com/derronqi/yolov8-fac
 
 Generate the ONNX model file (example for YOLOv8n-Face)
 
-```
+```bash
 python3 export_yoloV8_face.py -w yolov8n-face.pt --dynamic
 ```
+https://onnxruntime.ai/docs/reference/compatibility.html
 
 **NOTE**: To change the inference size (defaut: 640)
 
-```
+```bash
 -s SIZE
 --size SIZE
 -s HEIGHT WIDTH
