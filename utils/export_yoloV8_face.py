@@ -6,11 +6,11 @@ from copy import deepcopy
 from importlib import reload
 
 # https://github.com/suno-ai/bark/issues/626
-original_load = torch.load
-def patched_load(*args, **kwargs):
-    kwargs['weights_only'] = False
-    return original_load(*args, **kwargs)
-torch.load = patched_load
+# original_load = torch.load
+# def patched_load(*args, **kwargs):
+#     kwargs['weights_only'] = False
+#     return original_load(*args, **kwargs)
+# torch.load = patched_load
 
 
 from ultralytics import YOLO
@@ -107,7 +107,9 @@ def main(args):
         do_constant_folding=True,
         input_names=["input"],
         output_names=["output"],
-        dynamic_axes=dynamic_axes if args.dynamic else None
+        dynamic_axes=dynamic_axes if args.dynamic else None,
+        # Add this line to force a single file:
+        use_external_data_format=False
     )
 
     if args.simplify:
