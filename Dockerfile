@@ -1,7 +1,5 @@
 ARG DEEPSTREAM_VERSION=7.1
-ARG PYDS_VERSION=1.2.0
-ARG PYTHON_VERSION=3.10
-ARG CUDA_VER=12.6
+
 
 
 ARG BASE_IMAGE=nvcr.io/nvidia/deepstream:${DEEPSTREAM_VERSION}-gc-triton-devel
@@ -13,8 +11,6 @@ LABEL org.opencontainers.image.title="DeepStream-Yolo-Face" \
       org.opencontainers.image.description="NVIDIA DeepStream SDK application for YOLO-Face models" \
       org.opencontainers.image.source="https://github.com/your-repo/DeepStream-Yolo-Face" \
       org.opencontainers.image.licenses="MIT"
-
-# Re-declare ARGs after FROM (they go out of scope)
 
 
 # Set environment variables
@@ -57,13 +53,21 @@ WORKDIR /app/DeepStream-Yolo-Face
 # Create directory for models early (can be used as mount point)
 RUN mkdir -p /app/models
 
+# Re-declare ARGs after FROM (they go out of scope)
+ARG PYDS_VERSION=1.2.0
+ARG PYTHON_VERSION=cp310
+ARG CUDA_VER=12.6
+
 RUN --mount=type=cache,target=/root/.cache/pip \
     echo "Attempting to install pyds from pre-built wheel..." && \
-    (wget -q https://github.com/NVIDIA-AI-IOT/deepstream_python_apps/releases/download/v${PYDS_VERSION}/pyds-${PYDS_VERSION}-${PYTHON_VERSION}-${PYTHON_VERSION}-linux_x86_64.whl -O /tmp/pyds-${PYDS_VERSION}-${PYTHON_VERSION}-linux_x86_64.whl && \
-     pip3 install /tmp/pyds-${PYDS_VERSION}-${PYTHON_VERSION}-linux_x86_64.whl && \
-     echo "✓ pyds installed successfully from wheel") || \
-    echo "⚠ Pre-built wheel not available, will build from source"
+    (wget -q https://github.com/NVIDIA-AI-IOT/deepstream_python_apps/releases/download/v${PYDS_VERSION}/pyds-${PYDS_VERSION}-${PYTHON_VERSION}-${PYTHON_VERSION}-linux_x86_64.whl -O /tmp/pyds-${PYDS_VERSION}-${PYTHON_VERSION}-${PYTHON_VERSION}-linux_x86_64.whl && \
+     pip3 install /tmp/pyds-${PYDS_VERSION}-${PYTHON_VERSION}-${PYTHON_VERSION}-linux_x86_64.whl && \
+     echo "✓ pyds installed successfully from wheel") 
 #https://github.com/NVIDIA-AI-IOT/deepstream_python_apps/releases/download/v1.2.0/pyds-1.2.0-cp310-cp310-linux_x86_64.whl
+
+RUN echo "===-${PYDS_VERSION}-${PYTHON_VERSION}-${PYTHON_VERSION}-linux_x86_64.whl"
+
+RUN ls -lah   /tmp/pyds-*.whl
 
 # Copy only build files first for better layer caching
 COPY Makefile ./
