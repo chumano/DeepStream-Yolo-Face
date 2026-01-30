@@ -59,10 +59,11 @@ RUN mkdir -p /app/models
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     echo "Attempting to install pyds from pre-built wheel..." && \
-    (wget -q https://github.com/NVIDIA-AI-IOT/deepstream_python_apps/releases/download/v${PYDS_VERSION}/pyds-${PYDS_VERSION}-py3-none-linux_x86_64.whl -O /tmp/pyds-${PYDS_VERSION}-py3-none-linux_x86_64.whl && \
-     pip3 install /tmp/pyds-${PYDS_VERSION}-py3-none-linux_x86_64.whl && \
+    (wget -q https://github.com/NVIDIA-AI-IOT/deepstream_python_apps/releases/download/v${PYDS_VERSION}/pyds-${PYDS_VERSION}-${PYTHON_VERSION}-${PYTHON_VERSION}-linux_x86_64.whl -O /tmp/pyds-${PYDS_VERSION}-${PYTHON_VERSION}-linux_x86_64.whl && \
+     pip3 install /tmp/pyds-${PYDS_VERSION}-${PYTHON_VERSION}-linux_x86_64.whl && \
      echo "✓ pyds installed successfully from wheel") || \
     echo "⚠ Pre-built wheel not available, will build from source"
+#https://github.com/NVIDIA-AI-IOT/deepstream_python_apps/releases/download/v1.2.0/pyds-1.2.0-cp310-cp310-linux_x86_64.whl
 
 # Copy only build files first for better layer caching
 COPY Makefile ./
