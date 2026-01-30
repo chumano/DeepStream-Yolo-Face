@@ -10,6 +10,8 @@ GOptionEntry entries[] = {
   {NULL}
 };
 
+static int MAX_DISPLAY_LEN = 128;
+
 static void
 set_custom_bbox(NvDsObjectMeta *obj_meta)
 {
@@ -18,6 +20,9 @@ set_custom_bbox(NvDsObjectMeta *obj_meta)
 
   gfloat x_offset = obj_meta->rect_params.left - border_width * 0.5f;
   gfloat y_offset = obj_meta->rect_params.top - font_size * 2 + border_width * 0.5f + 1;
+
+  // Set display text to show object ID
+  g_snprintf(obj_meta->text_params.display_text, MAX_DISPLAY_LEN, "ID: %lu", obj_meta->object_id);
 
   obj_meta->rect_params.border_width = border_width;
   obj_meta->rect_params.border_color.red = 0.0;
@@ -290,6 +295,12 @@ main(gint argc, char *argv[])
     return -1;
   }
 
+  GstElement *nvtracker = gst_element_factory_make("nvtracker", "nvtracker");
+  if (!nvtracker || !gst_bin_add(GST_BIN(pipeline), nvtracker)) {
+    g_printerr("ERROR - Failed to create nvtracker\n");
+    return -1;
+  }
+
   GstElement *nvvidconv = gst_element_factory_make("nvvideoconvert", "nvvideoconvert");
   if (!nvvidconv || !gst_bin_add(GST_BIN(pipeline), nvvidconv)) {
     g_printerr("ERROR - Failed to create nvvideoconvert\n");
@@ -342,6 +353,10 @@ main(gint argc, char *argv[])
   g_object_set(G_OBJECT(nvstreammux), "batch-size", STREAMMUX_BATCH_SIZE, "batched-push-timeout", 25000,
       "width", STREAMMUX_WIDTH, "height", STREAMMUX_HEIGHT, "live-source", 1, NULL);
   g_object_set(G_OBJECT(nvinfer), "config-file-path", INFER_CONFIG, "qos", 0, NULL);
+  g_object_set(G_OBJECT(nvtracker), "tracker-width", 640, "tracker-height", 384,
+      "ll-lib-file", "/opt/nvidia/deepstream/deepstream/lib/libnvds_nvmultiobjecttracker.so",
+      "ll-config-file", "/opt/nvidia/deepstream/deepstream/samples/configs/deepstream-app/config_tracker_NvDCF_perf.yml",
+      "gpu-id", GPU_ID, "display-tracking-id", 1, NULL);
   g_object_set(G_OBJECT(nvosd), "process-mode", MODE_GPU, "qos", 0, NULL);
   g_object_set(G_OBJECT(nvsink), "async", 0, "sync", 0, "qos", 0, NULL);
 
@@ -359,7 +374,7 @@ main(gint argc, char *argv[])
     g_object_set(G_OBJECT(nvosd), "gpu_id", GPU_ID, NULL);
   }
 
-  if (!gst_element_link_many(nvstreammux, nvinfer, nvvidconv, capsfilter, nvosd, nvsink, NULL)) {
+  if (!gst_element_link_many(nvstreammux, nvinfer, nvtracker, nvvidconv, capsfilter, nvosd, nvsink, NULL)) {
     g_printerr("ERROR - Failed to link pipeline elements\n");
     return -1;
   }

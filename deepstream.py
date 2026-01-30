@@ -75,6 +75,9 @@ def set_custom_bbox(obj_meta):
     x_offset = obj_meta.rect_params.left - border_width * 0.5
     y_offset = obj_meta.rect_params.top - font_size * 2 + border_width * 0.5 + 1
 
+    # Set display text to show object ID
+    obj_meta.text_params.display_text = f"ID: {obj_meta.object_id}"
+
     obj_meta.rect_params.border_width = border_width
     obj_meta.rect_params.border_color.red = 0.0
     obj_meta.rect_params.border_color.green = 0.0
@@ -286,6 +289,11 @@ def main():
         sys.stderr.write("ERROR - Failed to create nvinfer\n")
         return -1
 
+    nvtracker = Gst.ElementFactory.make("nvtracker", "nvtracker")
+    if not nvtracker or pipeline.add(nvtracker):
+        sys.stderr.write("ERROR - Failed to create nvtracker\n")
+        return -1
+
     nvvidconv = Gst.ElementFactory.make("nvvideoconvert", "nvvidconv")
     if not nvvidconv or pipeline.add(nvvidconv):
         sys.stderr.write("ERROR - Failed to create nvvideoconvert\n")
@@ -331,6 +339,12 @@ def main():
     nvstreammux.set_property("live-source", 1)
     nvinfer.set_property("config-file-path", INFER_CONFIG)
     nvinfer.set_property("qos", 0)
+    nvtracker.set_property("tracker-width", 640)
+    nvtracker.set_property("tracker-height", 384)
+    nvtracker.set_property("ll-lib-file", "/opt/nvidia/deepstream/deepstream/lib/libnvds_nvmultiobjecttracker.so")
+    nvtracker.set_property("ll-config-file", "/opt/nvidia/deepstream/deepstream/samples/configs/deepstream-app/config_tracker_NvDCF_perf.yml")
+    nvtracker.set_property("gpu-id", GPU_ID)
+    nvtracker.set_property("display-tracking-id", 1)
     nvosd.set_property("process-mode", 1)  # GPU process mode
     nvosd.set_property("qos", 0)
     nvsink.set_property("async", 0)
@@ -354,7 +368,8 @@ def main():
         nvosd.set_property("gpu_id", GPU_ID)
 
     nvstreammux.link(nvinfer)
-    nvinfer.link(nvvidconv)
+    nvinfer.link(nvtracker)
+    nvtracker.link(nvvidconv)
     nvvidconv.link(capsfilter)
     capsfilter.link(nvosd)
     nvosd.link(nvsink)

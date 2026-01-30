@@ -190,8 +190,14 @@ My projects: https://www.youtube.com/MarcosLucianoTV
 Splitting a video into multiple segments for testing:
 
 ```bash
-ffmpeg -i ./videos/friends.mp4 -c copy -map 0 -segment_time 600 -f segment ./videos/friends_video_%03d.mp4
+ffmpeg -i ./videos/friends.mp4 -c copy -map 0 -segment_time 600 -f segment -reset_timestamps 1 ./videos/friends_video_%03d.mp4
 ```
+
+Cut a segment from a video:
+```bash
+ffmpeg -ss 00:30:46 -i ./videos/friends.mp4 -t 00:01:40 -c copy ./videos/faces_tracking.mp4
+```
+
 
 Copy videos from docker container to host:
 ```bash
