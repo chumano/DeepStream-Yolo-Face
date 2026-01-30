@@ -15,19 +15,19 @@ pip install torch --dry-run --report -
 curl -s https://pypi.org/pypi/torch/json
 
 ```bash
-git clone https://github.com/derronqi/yolov8-face.git
+git clone https://github.com/chumano/yolov8-face.git
 cd yolov8-face
 pip3 install -r requirements.txt
 python3 setup.py install
 pip3 install onnx onnxslim onnxruntime
-pip3 install onnx==1.12.0 # supported OPS version 17
+ # supported OPS version 17
+pip3 install onnx==1.12.0
 pip3 install onnxruntime==1.13.1 onnxslim==0.1.82 onnxscript==0.5.7
-pip3 install torch==2.1.2
+pip3 install torch==2.0.1 torchvision==0.15.2
 # For more details, visit https://onnxruntime.ai/docs/reference/compatibility.html
 
-# pip freeze > requirements.txt
-# apt-get remove libprotobuf-dev protobuf-compiler
 ```
+
 requirements.txt file:
 ```bash
 matplotlib>=3.2.2 # for plotting results
@@ -39,6 +39,93 @@ requests>=2.23.0 # HTTP requests
 scipy>=1.4.1 # scientific computing
 torch>=1.7.0,<2.0.0 # tensor computing
 torchvision>=0.8.1,<0.16.0 # vision utils
+```
+ 
+```bash
+pip freeze > requirements.txt
+
+certifi==2026.1.4
+charset-normalizer==3.4.4
+cmake==4.2.1
+colorama==0.4.6
+coloredlogs==15.0.1
+contourpy==1.3.2
+cuda-bindings==12.9.4
+cuda-pathfinder==1.3.3
+cycler==0.12.1
+filelock==3.20.3
+flatbuffers==25.12.19
+fonttools==4.61.1
+fsspec==2026.1.0
+humanfriendly==10.0
+idna==3.11
+Jinja2==3.1.6
+kiwisolver==1.4.9
+lit==18.1.8
+markdown-it-py==4.0.0
+MarkupSafe==3.0.3
+matplotlib==3.10.8
+mdurl==0.1.2
+ml_dtypes==0.5.4
+mpmath==1.3.0
+networkx==3.4.2
+numpy==1.26.4
+nvidia-cublas-cu11==11.10.3.66
+nvidia-cublas-cu12==12.1.3.1
+nvidia-cuda-cupti-cu11==11.7.101
+nvidia-cuda-cupti-cu12==12.1.105
+nvidia-cuda-nvrtc-cu11==11.7.99
+nvidia-cuda-nvrtc-cu12==12.1.105
+nvidia-cuda-runtime-cu11==11.7.99
+nvidia-cuda-runtime-cu12==12.1.105
+nvidia-cudnn-cu11==8.5.0.96
+nvidia-cudnn-cu12==8.9.2.26
+nvidia-cufft-cu11==10.9.0.58
+nvidia-cufft-cu12==11.0.2.54
+nvidia-cufile-cu12==1.13.1.3
+nvidia-curand-cu11==10.2.10.91
+nvidia-curand-cu12==10.3.2.106
+nvidia-cusolver-cu11==11.4.0.1
+nvidia-cusolver-cu12==11.4.5.107
+nvidia-cusparse-cu11==11.7.4.91
+nvidia-cusparse-cu12==12.1.0.106
+nvidia-cusparselt-cu12==0.7.1
+nvidia-nccl-cu11==2.14.3
+nvidia-nccl-cu12==2.18.1
+nvidia-nvjitlink-cu12==12.8.93
+nvidia-nvshmem-cu12==3.4.5
+nvidia-nvtx-cu11==11.7.91
+nvidia-nvtx-cu12==12.1.105
+onnx==1.20.1
+onnx-ir==0.1.15
+onnxruntime==1.13.1
+onnxscript==0.5.7
+onnxslim==0.1.82
+opencv-python==4.13.0.90
+packaging==26.0
+pandas==2.3.3
+pillow==12.1.0
+protobuf==6.33.4
+psutil==7.2.2
+Pygments==2.19.2
+pyparsing==3.3.2
+python-dateutil==2.9.0.post0
+pytz==2025.2
+PyYAML==6.0.3
+requests==2.32.5
+rich==14.3.1
+scipy==1.15.3
+seaborn==0.13.2
+six==1.17.0
+sympy==1.14.0
+thop==0.1.1.post2209072238
+torch==2.0.1
+torchvision==0.15.2
+tqdm==4.67.1
+triton==2.0.0
+typing_extensions==4.15.0
+tzdata==2025.3
+urllib3==2.6.3
 ```
 
 **NOTE**: It is recommended to use Python virtualenv.
