@@ -339,6 +339,11 @@ def main():
     nvsink.set_property("sync", 0)
     nvsink.set_property("qos", 0)
 
+    # set width and height for nvsink view
+    nvsink.set_property("window-width", 400)
+    nvsink.set_property("window-height", 300)
+
+
     if SOURCE.startswith("file://"):
         nvstreammux.set_property("live-source", 0)
 
