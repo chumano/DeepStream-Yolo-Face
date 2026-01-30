@@ -27,7 +27,7 @@ docker exec -it ds-kafka kafka-console-consumer \
   --from-beginning
 ```
 
-3. **Consume latest messages only:**
+3. **Consume live messages:**
 ```bash
 docker exec -it ds-kafka kafka-console-consumer \
   --bootstrap-server localhost:9092 \

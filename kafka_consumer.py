@@ -3,6 +3,16 @@ from kafka.errors import KafkaError
 import json
 import sys
 
+# Landmark labels for face keypoints (typical 5-point configuration)
+# Adjust based on your model's output format
+LANDMARK_LABELS = {
+    0: "Left Eye",
+    1: "Right Eye",
+    2: "Nose",
+    3: "Left Mouth Corner",
+    4: "Right Mouth Corner"
+}
+
 # Create consumer
 try:
     consumer = KafkaConsumer(
@@ -31,6 +41,14 @@ try:
         print(f"BBox: [{detection['bbox']['left']:.0f}, {detection['bbox']['top']:.0f}, "
               f"{detection['bbox']['width']:.0f}, {detection['bbox']['height']:.0f}]")
         print(f"Frame: {detection['frame_number']}, Source: {detection['source_id']}")
+        
+        # Display landmarks with labels
+        if 'landmarks' in detection and detection['landmarks']:
+            print(f"Landmarks ({len(detection['landmarks'])} points):")
+            for idx, landmark in enumerate(detection['landmarks']):
+                label = LANDMARK_LABELS.get(idx, f"Point {idx}")
+                print(f"  {label}: x={landmark['x']:.1f}, y={landmark['y']:.1f}, conf={landmark['confidence']:.2f}")
+        
 except KeyboardInterrupt:
     print("\nStopping consumer...")
 except Exception as e:

@@ -123,6 +123,25 @@ def send_detection_to_kafka(frame_meta, obj_meta):
     
     seen_object_ids.append(object_id)
     
+    # Extract landmarks
+    landmarks = []
+    num_joints = int(obj_meta.mask_params.size / (sizeof(c_float) * 3))
+    gain = min(obj_meta.mask_params.width / STREAMMUX_WIDTH, obj_meta.mask_params.height / STREAMMUX_HEIGHT)
+    pad_x = (obj_meta.mask_params.width - STREAMMUX_WIDTH * gain) * 0.5
+    pad_y = (obj_meta.mask_params.height - STREAMMUX_HEIGHT * gain) * 0.5
+    
+    for i in range(num_joints):
+        data = obj_meta.mask_params.get_mask_array()
+        xc = (data[i * 3 + 0] - pad_x) / gain
+        yc = (data[i * 3 + 1] - pad_y) / gain
+        confidence = data[i * 3 + 2]
+        
+        landmarks.append({
+            "x": float(xc),
+            "y": float(yc),
+            "confidence": float(confidence)
+        })
+    
     # Prepare detection data
     detection_data = {
         "timestamp": time.time(),
@@ -135,6 +154,7 @@ def send_detection_to_kafka(frame_meta, obj_meta):
             "width": obj_meta.rect_params.width,
             "height": obj_meta.rect_params.height
         },
+        "landmarks": landmarks,
         "frame_number": frame_meta.frame_num,
         "source_id": frame_meta.source_id
     }
@@ -144,7 +164,7 @@ def send_detection_to_kafka(frame_meta, obj_meta):
         future = kafka_producer.send(KAFKA_TOPIC, value=detection_data)
         # Optionally wait for confirmation (with timeout)
         record_metadata = future.get(timeout=1)
-        sys.stdout.write(f"DEBUG - Sent detection for new obj ID {object_id} at frame {frame_meta.frame_num} to Kafka {KAFKA_TOPIC} (partition: {record_metadata.partition}, offset: {record_metadata.offset})\n")
+        sys.stdout.write(f"DEBUG - Sent detection for new obj ID {object_id} at frame {frame_meta.frame_num} with {len(landmarks)} landmarks to Kafka {KAFKA_TOPIC} (partition: {record_metadata.partition}, offset: {record_metadata.offset})\n")
     except KafkaError as e:
         sys.stderr.write(f"ERROR - Failed to send to Kafka: {e}\n")
     except Exception as e:
