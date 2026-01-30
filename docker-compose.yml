@@ -1,5 +1,5 @@
-
 services:
+
   deepstream-yolo-face:
     build:
       context: .
@@ -27,6 +27,7 @@ services:
       - DISPLAY=${DISPLAY:-:0}
       #- QT_X11_NO_MITSHM=1
       - CUDA_VISIBLE_DEVICES=0
+      - KAFKA_BROKER=kafka:29092
     
     # For GUI display (X11 forwarding)
     volumes:
@@ -40,8 +41,9 @@ services:
       - ./deepstream.c:/app/DeepStream-Yolo-Face/deepstream.c:ro
       - ./tests:/app/DeepStream-Yolo-Face/tests:ro
     
-    # Network mode for RTSP streams
-    network_mode: host
+    # Use network instead of host mode to enable Kafka communication
+    networks:
+      - deepstream-network
     
     # Interactive mode
     stdin_open: true
@@ -59,6 +61,7 @@ services:
        python3 deepstream.py 
        -s file:///opt/nvidia/deepstream/deepstream/samples/streams/sample_1080p_h264.mp4 
        -c config_infer_primary_yoloV8_face.txt
+       --kafka-broker kafka:29092
 
   # Development service with shell access
   dev:
@@ -69,3 +72,38 @@ services:
       - dev
     entrypoint: ["tail", "-f", "/dev/null"]
     command: []
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    container_name: ds-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    # ports:
+    #   - "2181:2181"
+    networks:
+      - deepstream-network
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: ds-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    #   - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    networks:
+      - deepstream-network
+
+networks:
+  deepstream-network:
+    driver: bridge

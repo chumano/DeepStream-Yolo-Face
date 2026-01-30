@@ -7,8 +7,12 @@ import sys
 import time
 import argparse
 import platform
+import json
 from threading import Lock
 from ctypes import sizeof, c_float
+from collections import deque
+from kafka import KafkaProducer
+from kafka.errors import KafkaError
 
 sys.path.append("/opt/nvidia/deepstream/deepstream/lib")
 import pyds
@@ -25,7 +29,13 @@ GPU_ID = 0
 PERF_MEASUREMENT_INTERVAL_SEC = 5
 JETSON = False
 
+KAFKA_BROKER = ""
+KAFKA_TOPIC = "face-detections"
+KAFKA_ENABLED = False
+
 perf_struct = {}
+kafka_producer = None
+seen_object_ids = deque(maxlen=100)
 
 
 class GETFPS:
@@ -98,6 +108,49 @@ def set_custom_bbox(obj_meta):
     obj_meta.text_params.text_bg_clr.alpha = 1.0
 
 
+def send_detection_to_kafka(frame_meta, obj_meta):
+    """Send detection information to Kafka for new object IDs"""
+    global kafka_producer, seen_object_ids
+    
+    if not KAFKA_ENABLED or kafka_producer is None:
+        return
+    
+    object_id = obj_meta.object_id
+    
+    # Only send if this is a new object ID
+    if object_id in seen_object_ids:
+        return
+    
+    seen_object_ids.append(object_id)
+    
+    # Prepare detection data
+    detection_data = {
+        "timestamp": time.time(),
+        "object_id": object_id,
+        "class_id": obj_meta.class_id,
+        "confidence": obj_meta.confidence,
+        "bbox": {
+            "left": obj_meta.rect_params.left,
+            "top": obj_meta.rect_params.top,
+            "width": obj_meta.rect_params.width,
+            "height": obj_meta.rect_params.height
+        },
+        "frame_number": frame_meta.frame_num,
+        "source_id": frame_meta.source_id
+    }
+    
+    try:
+        # Send to Kafka and get future
+        future = kafka_producer.send(KAFKA_TOPIC, value=detection_data)
+        # Optionally wait for confirmation (with timeout)
+        record_metadata = future.get(timeout=1)
+        sys.stdout.write(f"DEBUG - Sent detection for new obj ID {object_id} at frame {frame_meta.frame_num} to Kafka {KAFKA_TOPIC} (partition: {record_metadata.partition}, offset: {record_metadata.offset})\n")
+    except KafkaError as e:
+        sys.stderr.write(f"ERROR - Failed to send to Kafka: {e}\n")
+    except Exception as e:
+        sys.stderr.write(f"ERROR - Unexpected error sending to Kafka: {e}\n")
+
+
 def parse_face_from_meta(batch_meta, frame_meta, obj_meta):
     display_meta = None
 
@@ -164,6 +217,7 @@ def nvosd_sink_pad_buffer_probe(pad, info, user_data):
 
             parse_face_from_meta(batch_meta, frame_meta, obj_meta)
             set_custom_bbox(obj_meta)
+            send_detection_to_kafka(frame_meta, obj_meta)
 
             try:
                 l_obj = l_obj.next
@@ -259,8 +313,48 @@ def is_aarch64():
     return platform.uname()[4] == "aarch64"
 
 
+def init_kafka_producer():
+    """Initialize Kafka producer"""
+    global kafka_producer
+    
+    if not KAFKA_ENABLED:
+        return
+    
+    try:
+        kafka_producer = KafkaProducer(
+            bootstrap_servers=KAFKA_BROKER,
+            value_serializer=lambda v: json.dumps(v).encode('utf-8'),
+            acks=1,  # Wait for leader acknowledgment
+            compression_type='gzip',
+            linger_ms=10,  # Batch messages for 10ms
+            request_timeout_ms=30000,
+            retries=3
+        )
+        # Test connection by getting metadata
+        kafka_producer.bootstrap_connected()
+        sys.stdout.write(f"INFO - Kafka producer initialized (broker: {KAFKA_BROKER}, topic: {KAFKA_TOPIC})\n")
+    except Exception as e:
+        sys.stderr.write(f"ERROR - Failed to initialize Kafka producer: {e}\n")
+        kafka_producer = None
+
+
+def cleanup_kafka_producer():
+    """Cleanup Kafka producer"""
+    global kafka_producer
+    
+    if kafka_producer is not None:
+        try:
+            kafka_producer.flush()
+            kafka_producer.close()
+            sys.stdout.write("INFO - Kafka producer closed\n")
+        except Exception as e:
+            sys.stderr.write(f"ERROR - Failed to close Kafka producer: {e}\n")
+
+
 def main():
     Gst.init(None)
+    
+    init_kafka_producer()
 
     loop = GLib.MainLoop()
     
@@ -399,6 +493,8 @@ def main():
         pass
 
     pipeline.set_state(Gst.State.NULL)
+    
+    cleanup_kafka_producer()
 
     sys.stdout.write("\n")
 
@@ -407,6 +503,7 @@ def main():
 
 def parse_args():
     global SOURCE, INFER_CONFIG, STREAMMUX_BATCH_SIZE, STREAMMUX_WIDTH, STREAMMUX_HEIGHT, GPU_ID, JETSON
+    global KAFKA_BROKER, KAFKA_TOPIC, KAFKA_ENABLED
 
     parser = argparse.ArgumentParser(description="DeepStream")
     parser.add_argument("-s", "--source", required=True, help="Source stream/file")
@@ -415,6 +512,8 @@ def parse_args():
     parser.add_argument("-w", "--streammux-width", type=int, default=1920, help="Streammux width (default 1920)")
     parser.add_argument("-e", "--streammux-height", type=int, default=1080, help="Streammux height (default 1080)")
     parser.add_argument("-g", "--gpu-id", type=int, default=0, help="GPU id (default 0)")
+    parser.add_argument("--kafka-broker", help="Kafka broker address (e.g., localhost:9092)")
+    parser.add_argument("--kafka-topic", default="face-detections", help="Kafka topic name (default: face-detections)")
     args = parser.parse_args()
 
     if args.source == "":
@@ -431,6 +530,11 @@ def parse_args():
     STREAMMUX_WIDTH = args.streammux_width
     STREAMMUX_HEIGHT = args.streammux_height
     GPU_ID = args.gpu_id
+    
+    if args.kafka_broker:
+        KAFKA_BROKER = args.kafka_broker
+        KAFKA_TOPIC = args.kafka_topic
+        KAFKA_ENABLED = True
 
     JETSON = is_aarch64()
 

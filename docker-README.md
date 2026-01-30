@@ -1,5 +1,5 @@
 # Docker Setup for DeepStream-Yolo-Face
-
+https://docs.nvidia.com/metropolis/deepstream/7.1/python-api/PYTHON_API/NvOSD/NvOSD_toc.html
 
 ## RUN
 REMEMBER: in run docker in WSL2
@@ -20,9 +20,20 @@ python3 deepstream.py \
     -s file:///app/videos/faces_tracking.mp4 \
     -c config_infer_primary_yoloV8_face.txt
 
+# send to kafka `pip3 install kafka-python==2.3.0`
+python3 deepstream.py \
+  -s file:///app/videos/faces_tracking.mp4 \
+  -c config_infer_primary_yoloV8_face.txt \
+  --kafka-broker kafka:29092 \
+  --kafka-topic face-detections
+
 # or C app
 ./deepstream \
     -s file:///app/videos/friends_short.mp4 \
+    -c config_infer_primary_yoloV8_face.txt
+
+./deepstream \
+    -s file:///app/videos/faces_tracking.mp4 \
     -c config_infer_primary_yoloV8_face.txt
 ```
 
