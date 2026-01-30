@@ -1,4 +1,12 @@
 ARG DEEPSTREAM_VERSION=7.1
+ARG PYDS_VERSION=1.2.0
+ARG PYTHON_VERSION=3.10
+ARG CUDA_VER=12.6
+# https://github.com/NVIDIA-AI-IOT/deepstream_python_apps/releases
+# DEEPSTREAM_VERSION=8.0 PYDS_VERSION=1.2.2 CUDA_VER 12.8 PYTHON_VERSION=3.12 Ubuntu 24.04
+# DEEPSTREAM_VERSION=7.1 PYDS_VERSION=1.2.0 CUDA_VER 12.6 PYTHON_VERSION=3.10 Ubuntu 22.04 
+# DEEPSTREAM_VERSION=6.4 PYDS_VERSION=1.1.10 CUDA_VER=12.2 PYTHON_VERSION=3.10 Ubuntu 22.04
+
 ARG BASE_IMAGE=nvcr.io/nvidia/deepstream:${DEEPSTREAM_VERSION}-gc-triton-devel
 
 FROM ${BASE_IMAGE}
@@ -10,9 +18,7 @@ LABEL org.opencontainers.image.title="DeepStream-Yolo-Face" \
       org.opencontainers.image.licenses="MIT"
 
 # Re-declare ARGs after FROM (they go out of scope)
-ARG CUDA_VER=12.6
-ARG PYDS_VERSION=1.2.0
-ARG PYTHON_VERSION=cp312
+
 
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -54,11 +60,12 @@ WORKDIR /app/DeepStream-Yolo-Face
 # Create directory for models early (can be used as mount point)
 RUN mkdir -p /app/models
 
-# Install DeepStream Python bindings with explicit error handling
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip3 install --no-cache-dir \
-    "https://github.com/NVIDIA-AI-IOT/deepstream_python_apps/releases/download/v${PYDS_VERSION}/pyds-${PYDS_VERSION}-${PYTHON_VERSION}-${PYTHON_VERSION}-linux_x86_64.whl" \
-    || { echo "Failed to install pyds wheel, trying fallback..." && pip3 install --no-cache-dir pyds; }
+    echo "Attempting to install pyds from pre-built wheel..." && \
+    (wget -q https://github.com/NVIDIA-AI-IOT/deepstream_python_apps/releases/download/v${PYDS_VERSION}/pyds-${PYDS_VERSION}-py3-none-linux_x86_64.whl -O /tmp/pyds-${PYDS_VERSION}-py3-none-linux_x86_64.whl && \
+     pip3 install /tmp/pyds-${PYDS_VERSION}-py3-none-linux_x86_64.whl && \
+     echo "✓ pyds installed successfully from wheel") || \
+    echo "⚠ Pre-built wheel not available, will build from source"
 
 # Copy only build files first for better layer caching
 COPY Makefile ./

@@ -1,5 +1,7 @@
 # Docker Setup for DeepStream-Yolo-Face
 
+REMEMBER: in run docker in WSL2
+
 DeepStream base image:
 ```bash
 docker pull nvcr.io/nvidia/deepstream:8.0-gc-triton-devel

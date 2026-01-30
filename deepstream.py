@@ -136,18 +136,24 @@ def parse_face_from_meta(batch_meta, frame_meta, obj_meta):
 
 
 def nvosd_sink_pad_buffer_probe(pad, info, user_data):
-    buf = info.get_buffer()
-    batch_meta = pyds.gst_buffer_get_nvds_batch_meta(hash(buf))
-
+    gst_buffer = info.get_buffer()
+    if not gst_buffer:
+        return Gst.PadProbeReturn.OK
+    
+    # Try alternate method to get batch metadata
+    batch_meta = pyds.gst_buffer_get_nvds_batch_meta(hash(gst_buffer))
+    if not batch_meta:
+        return Gst.PadProbeReturn.OK
+    
     l_frame = batch_meta.frame_meta_list
-    while l_frame:
+    while l_frame is not None:
         try:
             frame_meta = pyds.NvDsFrameMeta.cast(l_frame.data)
         except StopIteration:
             break
 
         l_obj = frame_meta.obj_meta_list
-        while l_obj:
+        while l_obj is not None:
             try:
                 obj_meta = pyds.NvDsObjectMeta.cast(l_obj.data)
             except StopIteration:
@@ -282,7 +288,7 @@ def main():
         sys.stderr.write("ERROR - Failed to create nvinfer\n")
         return -1
 
-    nvvidconv = Gst.ElementFactory.make("nvvideoconvert", "nvvideoconvert")
+    nvvidconv = Gst.ElementFactory.make("nvvideoconvert", "nvvidconv")
     if not nvvidconv or pipeline.add(nvvidconv):
         sys.stderr.write("ERROR - Failed to create nvvideoconvert\n")
         return -1

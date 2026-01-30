@@ -57,6 +57,15 @@ def main():
         return -1
     
     print("Successfully added nvstreammux to pipeline")
+
+    # check  pyds
+    if pyds is not None:
+        print("pyds module is available")
+    dirs = dir(pyds)
+    print("pyds module attributes and methods:")
+    for d in dirs:
+        print(d)
+    print(f"pyds version: {pyds.__version__}")
     
 if __name__ == "__main__":
     main()
