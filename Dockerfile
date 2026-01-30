@@ -47,6 +47,21 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     python3-pip \
     wget
 
+# Install other apt dependencies 
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt install -y \
+        libvpx-dev \
+        libx264-dev \
+        libx265-dev \
+        libflac-dev \
+        libmpg123-dev \
+        libmp3lame-dev \
+        libdca-dev \
+        libdvdread-dev \
+        libdvdnav-dev \
+        libmjpegtools-dev
+
 # Set working directory
 WORKDIR /app/DeepStream-Yolo-Face
 
@@ -57,6 +72,7 @@ RUN mkdir -p /app/models
 ARG PYDS_VERSION=1.2.0
 ARG PYTHON_VERSION=cp310
 ARG CUDA_VER=12.6
+ENV CUDA_VER=${CUDA_VER}
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     echo "Attempting to install pyds from pre-built wheel..." && \

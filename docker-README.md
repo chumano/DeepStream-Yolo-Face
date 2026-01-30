@@ -51,6 +51,11 @@ REMEMBER: in run docker in WSL2
 GST_DEBUG=*:3 python3 deepstream.py \
     -s file:///app/videos/friends_short.mp4 \
     -c config_infer_primary_yoloV8_face.txt
+
+# or C app
+./deepstream \
+    -s file:///app/videos/friends_short.mp4 \
+    -c config_infer_primary_yoloV8_face.txt
 ```
 
 DeepStream base image:

@@ -167,6 +167,14 @@ sudo apt install -y \
 # Find exact package names for your system
 dpkg -l | grep -E "libvpx|libx264|libx265|libflac|libmpg123|libmp3lame|libdca|libdvdread|libdvdnav|mjpeg"
 
+# Show installed files for a specific library
+dpkg -L libavcodec58 | grep .so
+
+ls /usr/lib/x86_64-linux-gnu/ | grep -E "libavcodec"
+
+# Reinstall specific library if needed
+apt-get install --reinstall libavcodec58
+
 # Search in repositories
 apt-cache search libvpx
 apt-cache search libx264

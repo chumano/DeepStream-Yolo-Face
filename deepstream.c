@@ -345,6 +345,9 @@ main(gint argc, char *argv[])
   g_object_set(G_OBJECT(nvosd), "process-mode", MODE_GPU, "qos", 0, NULL);
   g_object_set(G_OBJECT(nvsink), "async", 0, "sync", 0, "qos", 0, NULL);
 
+  // set nvsink window-width and height
+  g_object_set(G_OBJECT(nvsink), "window-width", 400, "window-height", 400, NULL);
+
   if (g_strrstr(SOURCE, "file://")) {
     g_object_set(G_OBJECT(nvstreammux), "live-source", 0, NULL);
   }
