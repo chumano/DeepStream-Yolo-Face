@@ -1,5 +1,23 @@
 # Docker Setup for DeepStream-Yolo-Face
 
+
+## RUN
+REMEMBER: in run docker in WSL2
+
+`docker compose exec -it deepstream-yolo-face-dev /bin/bash`
+
+Then inside container run inference:
+```bash
+GST_DEBUG=*:3 python3 deepstream.py \
+    -s file:///app/videos/friends_short.mp4 \
+    -c config_infer_primary_yoloV8_face.txt
+
+# or C app
+./deepstream \
+    -s file:///app/videos/friends_short.mp4 \
+    -c config_infer_primary_yoloV8_face.txt
+```
+
 ## VERSIONS
 https://github.com/NVIDIA-AI-IOT/deepstream_python_apps/releases
 ```bash
@@ -44,21 +62,8 @@ cat /etc/os-release
 ```
 
 
-## RUN
-REMEMBER: in run docker in WSL2
 
-```bash
-GST_DEBUG=*:3 python3 deepstream.py \
-    -s file:///app/videos/friends_short.mp4 \
-    -c config_infer_primary_yoloV8_face.txt
-
-# or C app
-./deepstream \
-    -s file:///app/videos/friends_short.mp4 \
-    -c config_infer_primary_yoloV8_face.txt
-```
-
-DeepStream base image:
+## DeepStream base image:
 ```bash
 docker pull nvcr.io/nvidia/deepstream:8.0-gc-triton-devel
 docker save nvcr.io/nvidia/deepstream:8.0-gc-triton-devel -o ./temp/deepstream:8.0-gc-triton-devel.tar
@@ -66,7 +71,7 @@ docker save nvcr.io/nvidia/deepstream:8.0-gc-triton-devel -o ./temp/deepstream:8
 docker load -i ./temp/deepstream:8.0-gc-triton-devel.tar
 ```
 
-Text deepstream
+## Test deepstream
 ```bash
 cd /opt/nvidia/deepstream/deepstream/samples/streams
 

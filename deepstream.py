@@ -257,8 +257,6 @@ def is_aarch64():
 
 
 def main():
-    print(os.environ.get("LD_LIBRARY_PATH"))
-    print(os.environ.get("GST_PLUGIN_PATH"))
     Gst.init(None)
 
     loop = GLib.MainLoop()

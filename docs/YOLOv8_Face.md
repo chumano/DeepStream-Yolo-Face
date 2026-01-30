@@ -235,6 +235,21 @@ make -C nvdsinfer_custom_impl_Yolo_face clean && make -C nvdsinfer_custom_impl_Y
 
 ##
 
+### Convert onnx to tensorrt engine (optional)
+```bash
+/usr/src/tensorrt/bin/trtexec \
+   --onnx=/app/models/yolov8n-face.onnx \
+   --saveEngine=/app/models/yolov8n-face.onnx_b1_gpu0_fp32.engine \
+   --fp16 \
+   --memPoolSize=workspace:2G \
+   --minShapes=input:1x3x640x640 \
+   --optShapes=input:1x3x640x640 \
+   --maxShapes=input:4x3x640x640 \
+   --shapes=input:1x3x640x640 \
+   --device=0
+```
+
+
 ### Edit the config_infer_primary_yoloV8_face file
 
 Edit the `config_infer_primary_yoloV8_face.txt` file according to your model (example for YOLOv8n-Face)
