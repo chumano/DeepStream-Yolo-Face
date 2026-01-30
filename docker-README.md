@@ -2,9 +2,14 @@
 
 ## VERSIONS
 https://github.com/NVIDIA-AI-IOT/deepstream_python_apps/releases
+```bash
 DEEPSTREAM_VERSION=8.0 PYDS_VERSION=1.2.2 CUDA_VER 12.8 PYTHON_VERSION=3.12 Ubuntu 24.04 GStreamer 1.24.2 TensorRT 10.9.0.34 NVIDIA driver 570.133.20
 DEEPSTREAM_VERSION=7.1 PYDS_VERSION=1.2.0 CUDA_VER 12.6 PYTHON_VERSION=3.10 Ubuntu 22.04 GStreamer 1.20.3 TensorRT 10.3.0.26 NVIDIA driver 535.183.06 (for Data Center GPUs) and 560.35.03 (for RTX GPUs)
-DEEPSTREAM_VERSION=6.4 PYDS_VERSION=1.1.10 CUDA_VER=12.2 PYTHON_VERSION=3.10 Ubuntu 22.04 GStreamer 1.20.3 TensorRT 8.6.1.6 NVIDIA driver 535.183.06 (for Data Center GPUs) and 560.35.03 (for RTX GPUs) 
+DEEPSTREAM_VERSION=6.4 PYDS_VERSION=1.1.10 CUDA_VER=12.2 PYTHON_VERSION=3.10 Ubuntu 22.04 GStreamer 1.20.3 TensorRT 8.6.1.6 NVIDIA driver 535.104.12
+```
+https://docs.nvidia.com/metropolis/deepstream/8.0/text/DS_Installation.html#prerequisites
+https://docs.nvidia.com/metropolis/deepstream/7.1/text/DS_Installation.html#id1
+https://docs.nvidia.com/metropolis/deepstream/6.4/dev-guide/text/DS_Quickstart.html#dgpu-setup-for-ubuntu
 
 My NVIDIA driver version: 577.00 (RTX 3060) works with DeepStream 7.1 and 6.4
 

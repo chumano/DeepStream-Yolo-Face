@@ -29,7 +29,7 @@ pip3 install torch==2.1.2
 # apt-get remove libprotobuf-dev protobuf-compiler
 ```
 requirements.txt file:
-```
+```bash
 matplotlib>=3.2.2 # for plotting results
 numpy>=1.21.6,<2.0.0 # array computing
 opencv-python>=4.6.0 # image/video processing
