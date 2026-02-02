@@ -8,6 +8,7 @@ import time
 import argparse
 import platform
 import json
+import base64
 from abc import ABC, abstractmethod
 from threading import Lock
 from ctypes import sizeof, c_float
@@ -16,6 +17,8 @@ from typing import Dict, Optional, Any, List, Tuple
 from dataclasses import dataclass
 from enum import Enum
 import math
+import cv2
+import numpy as np
 
 from kafka import KafkaProducer
 from kafka.errors import KafkaError
@@ -661,7 +664,65 @@ def assess_face_quality(landmarks):
     return is_good_face, quality_score, quality_metrics
 
 
-def send_detection_to_kafka(frame_meta, obj_meta):
+def crop_face_from_frame(frame_image, bbox, padding_ratio=0.2):
+    """
+    Crop face region from frame with optional padding.
+    
+    Args:
+        frame_image: numpy array of the frame (H, W, C)
+        bbox: dict with left, top, width, height
+        padding_ratio: ratio of padding to add around the face (default 0.2 = 20%)
+    
+    Returns:
+        face_image_base64: base64 encoded JPEG image string, or None if failed
+    """
+    if frame_image is None:
+        return None
+    
+    try:
+        h, w = frame_image.shape[:2]
+        
+        # Get bbox coordinates
+        left = int(bbox['left'])
+        top = int(bbox['top'])
+        width = int(bbox['width'])
+        height = int(bbox['height'])
+        
+        # Add padding
+        pad_w = int(width * padding_ratio)
+        pad_h = int(height * padding_ratio)
+        
+        # Calculate crop coordinates with padding, clamped to image bounds
+        x1 = max(0, left - pad_w)
+        y1 = max(0, top - pad_h)
+        x2 = min(w, left + width + pad_w)
+        y2 = min(h, top + height + pad_h)
+        
+        # Crop face region
+        face_crop = frame_image[y1:y2, x1:x2]
+        
+        if face_crop.size == 0:
+            return None
+        
+        # Convert to BGR if needed (DeepStream uses RGBA)
+        if face_crop.shape[2] == 4:
+            face_crop = cv2.cvtColor(face_crop, cv2.COLOR_RGBA2BGR)
+        
+        # Encode as JPEG
+        encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 85]
+        _, buffer = cv2.imencode('.jpg', face_crop, encode_param)
+        
+        # Convert to base64
+        face_base64 = base64.b64encode(buffer).decode('utf-8')
+        
+        return face_base64
+    
+    except Exception as e:
+        sys.stderr.write(f"ERROR - Failed to crop face: {e}\n")
+        return None
+
+
+def send_detection_to_kafka(frame_meta, obj_meta, frame_image=None):
     """Queue detection for sending via DetectionManager"""
     global detection_manager
     
@@ -692,18 +753,26 @@ def send_detection_to_kafka(frame_meta, obj_meta):
     # Assess face quality
     is_good_face, quality_score, quality_metrics = assess_face_quality(landmarks)
     
+    # Get bbox for cropping
+    bbox = {
+        "left": obj_meta.rect_params.left,
+        "top": obj_meta.rect_params.top,
+        "width": obj_meta.rect_params.width,
+        "height": obj_meta.rect_params.height
+    }
+    
+    # Crop face and encode as base64
+    face_image_base64 = None
+    if frame_image is not None:
+        face_image_base64 = crop_face_from_frame(frame_image, bbox)
+    
     # Prepare detection data
     detection_data = {
         "timestamp": time.time(),
         "object_id": object_id,
         "class_id": obj_meta.class_id,
         "confidence": obj_meta.confidence,
-        "bbox": {
-            "left": obj_meta.rect_params.left,
-            "top": obj_meta.rect_params.top,
-            "width": obj_meta.rect_params.width,
-            "height": obj_meta.rect_params.height
-        },
+        "bbox": bbox,
         "landmarks": landmarks,
         "face_quality": {
             "is_good_face": is_good_face,
@@ -711,7 +780,8 @@ def send_detection_to_kafka(frame_meta, obj_meta):
             **quality_metrics
         },
         "frame_number": frame_meta.frame_num,
-        "source_id": frame_meta.source_id
+        "source_id": frame_meta.source_id,
+        "face_image": face_image_base64  # Base64 encoded face image
     }
     
     # Queue via detection manager
@@ -762,6 +832,34 @@ def parse_face_from_meta(batch_meta, frame_meta, obj_meta):
         display_meta.num_circles += 1
 
 
+def get_frame_image(gst_buffer, frame_meta):
+    """
+    Extract frame image from GStreamer buffer as numpy array.
+    
+    Args:
+        gst_buffer: GStreamer buffer
+        frame_meta: NvDsFrameMeta
+    
+    Returns:
+        numpy array of shape (H, W, C) or None if failed
+    """
+    try:
+        # Get the surface from buffer
+        n_frame = pyds.get_nvds_buf_surface(hash(gst_buffer), frame_meta.batch_id)
+        
+        if n_frame is None:
+            return None
+        
+        # Convert to numpy array (makes a copy)
+        frame_image = np.array(n_frame, copy=True, order='C')
+        
+        return frame_image
+    
+    except Exception as e:
+        sys.stderr.write(f"ERROR - Failed to get frame image: {e}\n")
+        return None
+
+
 def nvosd_sink_pad_buffer_probe(pad, info, user_data):
     gst_buffer = info.get_buffer()
     if not gst_buffer:
@@ -779,6 +877,11 @@ def nvosd_sink_pad_buffer_probe(pad, info, user_data):
         except StopIteration:
             break
 
+        # Extract frame image for face cropping (only if Kafka is enabled)
+        frame_image = None
+        if detection_manager is not None and detection_manager.enabled:
+            frame_image = get_frame_image(gst_buffer, frame_meta)
+
         l_obj = frame_meta.obj_meta_list
         while l_obj is not None:
             try:
@@ -788,7 +891,7 @@ def nvosd_sink_pad_buffer_probe(pad, info, user_data):
 
             parse_face_from_meta(batch_meta, frame_meta, obj_meta)
             set_custom_bbox(obj_meta)
-            send_detection_to_kafka(frame_meta, obj_meta)
+            send_detection_to_kafka(frame_meta, obj_meta, frame_image)
 
             try:
                 l_obj = l_obj.next
@@ -1030,6 +1133,10 @@ def main():
     nvsink.set_property("qos", 0)
     nvsink.set_property("window-width", 400)
     nvsink.set_property("window-height", 300)
+
+    # Set capsfilter to force RGBA format (required for face cropping)
+    caps = Gst.Caps.from_string("video/x-raw(memory:NVMM), format=RGBA")
+    capsfilter.set_property("caps", caps)
 
     if SOURCE.startswith("file://"):
         nvstreammux.set_property("live-source", 0)

@@ -3,6 +3,13 @@ from kafka.errors import KafkaError
 import json
 import sys
 import time
+import os
+import base64
+from datetime import datetime
+
+# Configuration
+OUTPUT_DIR = "outputs/faces"  # Directory to save face images
+SAVE_IMAGES = True  # Set to False to disable saving images
 
 # Landmark labels for face keypoints (typical 5-point configuration)
 # Adjust based on your model's output format
@@ -13,6 +20,53 @@ LANDMARK_LABELS = {
     3: "Left Mouth Corner",
     4: "Right Mouth Corner"
 }
+
+
+def save_face_image(detection):
+    """
+    Save the face image from detection data to disk.
+    
+    Args:
+        detection: Detection data dict containing face_image (base64)
+    
+    Returns:
+        str: Path to saved image, or None if not saved
+    """
+    if not SAVE_IMAGES:
+        return None
+    
+    face_image_base64 = detection.get('face_image')
+    if not face_image_base64:
+        return None
+    
+    try:
+        # Create output directory if it doesn't exist
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        
+        # Decode base64 image
+        image_data = base64.b64decode(face_image_base64)
+        
+        # Generate filename with timestamp and object ID
+        timestamp = detection.get('timestamp', time.time())
+        dt = datetime.fromtimestamp(timestamp)
+        object_id = detection.get('object_id', 0)
+        frame_num = detection.get('frame_number', 0)
+        quality_score = detection.get('face_quality', {}).get('quality_score', 0)
+        
+        # Format: face_YYYYMMDD_HHMMSS_objID_frame_quality.jpg
+        filename = f"face_{object_id:03d}_{dt.strftime('%Y%m%d_%H%M%S')}_f{frame_num}_q{quality_score:.2f}.jpg"
+        filepath = os.path.join(OUTPUT_DIR, filename)
+        
+        # Save image
+        with open(filepath, 'wb') as f:
+            f.write(image_data)
+        
+        return filepath
+    
+    except Exception as e:
+        print(f"ERROR - Failed to save face image: {e}")
+        return None
+
 
 # Create consumer
 try:
@@ -27,6 +81,7 @@ try:
     print(f"Connected to Kafka broker: localhost:9092")
     print(f"Subscribed to topic: face-detections")
     print(f"Partitions: {consumer.partitions_for_topic('face-detections')}")
+    print(f"Saving images to: {os.path.abspath(OUTPUT_DIR)}" if SAVE_IMAGES else "Image saving disabled")
     print("Listening for face detection events...")
 except KafkaError as e:
     print(f"ERROR - Failed to create consumer: {e}")
@@ -38,6 +93,7 @@ try:
     start_time = time.time()
     last_stats_time = start_time
     stats_interval = 5  # Print stats every 5 seconds
+    images_saved = 0  # Track saved images count
     
     for message in consumer:
         message_count += 1
@@ -73,6 +129,17 @@ try:
                 label = LANDMARK_LABELS.get(idx, f"Point {idx}")
                 print(f"  {label}: x={landmark['x']:.1f}, y={landmark['y']:.1f}, conf={landmark['confidence']:.2f}")
         
+        # Save face image if present
+        if detection.get('face_image'):
+            saved_path = save_face_image(detection)
+            if saved_path:
+                images_saved += 1
+                print(f"\n📷 Face image saved: {saved_path}")
+            else:
+                print(f"\n⚠️ Face image present but failed to save")
+        else:
+            print(f"\n⚠️ No face image in detection")
+        
         # Print statistics periodically
         elapsed_since_stats = current_time - last_stats_time
         if elapsed_since_stats >= stats_interval:
@@ -83,6 +150,7 @@ try:
             print(f"\n{'='*50}")
             print(f"STATISTICS:")
             print(f"  Total Messages: {message_count}")
+            print(f"  Images Saved: {images_saved}")
             print(f"  Total Time: {total_elapsed:.1f}s")
             print(f"  Average Rate: {avg_msg_per_sec:.2f} msg/s")
             print(f"{'='*50}")
@@ -96,6 +164,7 @@ except KeyboardInterrupt:
         avg_rate = message_count / total_time
         print(f"\nFINAL STATISTICS:")
         print(f"  Total Messages: {message_count}")
+        print(f"  Images Saved: {images_saved}")
         print(f"  Total Time: {total_time:.1f}s")
         print(f"  Average Rate: {avg_rate:.2f} msg/s")
 except Exception as e:

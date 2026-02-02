@@ -81,7 +81,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
      echo "✓ pyds installed successfully from wheel") 
 #https://github.com/NVIDIA-AI-IOT/deepstream_python_apps/releases/download/v1.2.0/pyds-1.2.0-cp310-cp310-linux_x86_64.whl
 
-RUN pip3 install kafka-python==2.3.0
+RUN pip3 install kafka-python==2.3.0 numpy==1.26.4 opencv-python==4.11.0.86
 
 # Copy only build files first for better layer caching
 COPY Makefile ./
