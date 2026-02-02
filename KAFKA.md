@@ -127,3 +127,13 @@ telnet localhost 9092
 docker exec -it kafka bash
 ```
 
+## Install librdkafka 
+```bash
+sudo apt-get install librdkafka-dev
+
+pkg-config --cflags rdkafka
+
+# Build có Kafka support
+make CUDA_VER=12.6 KAFKA=1
+
+```

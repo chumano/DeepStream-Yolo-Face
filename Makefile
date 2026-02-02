@@ -16,6 +16,15 @@ ifeq ($(TARGET_DEVICE), aarch64)
 	CFLAGS+= -DPLATFORM_TEGRA
 endif
 
+# Kafka support (optional) - build with: make KAFKA=1
+KAFKA?=0
+ifeq ($(KAFKA), 1)
+	CFLAGS+= -DKAFKA_ENABLED_BUILD
+	KAFKA_LIBS:= -lrdkafka
+else
+	KAFKA_LIBS:=
+endif
+
 SRCS:= $(wildcard *.c)
 SRCS+= $(wildcard modules/*.c)
 
@@ -33,7 +42,7 @@ CFLAGS+= `pkg-config --cflags $(PKGS)`
 LIBS:= `pkg-config --libs $(PKGS)`
 
 LIBS+= -L$(LIB_INSTALL_DIR) -lnvdsgst_meta -lnvds_meta -lnvdsgst_helper -L/usr/local/cuda-$(CUDA_VER)/lib64/ -lcudart \
-       -lcuda -Wl,-rpath,$(LIB_INSTALL_DIR)
+       -lcuda -Wl,-rpath,$(LIB_INSTALL_DIR) $(KAFKA_LIBS)
 
 all: $(APP)
 
@@ -45,3 +54,20 @@ $(APP): $(OBJS) Makefile
 
 clean:
 	rm -rf $(OBJS) $(APP)
+
+.PHONY: all clean help
+
+help:
+	@echo "DeepStream Face Detection Application"
+	@echo ""
+	@echo "Usage:"
+	@echo "  make CUDA_VER=<version>           Build without Kafka support"
+	@echo "  make CUDA_VER=<version> KAFKA=1   Build with Kafka support (requires librdkafka)"
+	@echo "  make clean                        Clean build files"
+	@echo ""
+	@echo "Example:"
+	@echo "  make CUDA_VER=12.6"
+	@echo "  make CUDA_VER=12.6 KAFKA=1"
+	@echo ""
+	@echo "Prerequisites for Kafka support:"
+	@echo "  sudo apt-get install librdkafka-dev"

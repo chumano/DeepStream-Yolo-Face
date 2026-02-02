@@ -38,6 +38,7 @@ services:
       # Mount video files directory (adjust path as needed)
       - ./videos:/app/videos:ro
       - ./deepstream.py:/app/DeepStream-Yolo-Face/deepstream.py:ro
+      - ./deepstream.h:/app/DeepStream-Yolo-Face/deepstream.h:ro
       - ./deepstream.c:/app/DeepStream-Yolo-Face/deepstream.c:ro
       - ./tests:/app/DeepStream-Yolo-Face/tests:ro
     
