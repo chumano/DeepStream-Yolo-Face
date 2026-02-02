@@ -13,6 +13,7 @@ from ctypes import sizeof, c_float
 from collections import deque
 from kafka import KafkaProducer
 from kafka.errors import KafkaError
+import math
 
 sys.path.append("/opt/nvidia/deepstream/deepstream/lib")
 import pyds
@@ -32,6 +33,13 @@ JETSON = False
 KAFKA_BROKER = ""
 KAFKA_TOPIC = "face-detections"
 KAFKA_ENABLED = False
+
+# Face quality thresholds
+MIN_LANDMARK_CONFIDENCE = 0.5  # Minimum confidence for a landmark to be valid
+MIN_VISIBLE_LANDMARKS = 3      # Minimum number of visible landmarks for a "good" face
+FACE_QUALITY_THRESHOLD = 0.6   # Minimum quality score (0-1) to send to Kafka
+MAX_HEAD_ROTATION_ANGLE = 25.0 # Maximum head rotation angle (degrees) for frontal face
+MIN_FRONTAL_SCORE = 0.7        # Minimum frontal score (0-1) for frontal face
 
 perf_struct = {}
 kafka_producer = None
@@ -108,6 +116,89 @@ def set_custom_bbox(obj_meta):
     obj_meta.text_params.text_bg_clr.alpha = 1.0
 
 
+def assess_face_quality(landmarks):
+    """
+    Assess face quality based on landmarks, focusing on frontal face detection.
+    Allows head tilt but detects face rotation (yaw).
+    Returns: (is_good_face, quality_score, quality_metrics)
+    """
+    if not landmarks or len(landmarks) < 5:
+        return False, 0.0, {}
+    
+    # Count visible landmarks
+    visible_count = sum(1 for lm in landmarks if lm['confidence'] >= MIN_LANDMARK_CONFIDENCE)
+    
+    if visible_count < MIN_VISIBLE_LANDMARKS:
+        return False, 0.0, {
+            'visible_landmarks': visible_count,
+            'total_landmarks': len(landmarks),
+            'avg_confidence': 0.0,
+            'is_frontal': False
+        }
+    
+    # Calculate average confidence
+    visible_confidences = [lm['confidence'] for lm in landmarks if lm['confidence'] >= MIN_LANDMARK_CONFIDENCE]
+    avg_confidence = sum(visible_confidences) / len(visible_confidences)
+    
+    # Extract key landmarks (5-point: left_eye, right_eye, nose, left_mouth, right_mouth)
+    left_eye = landmarks[0]
+    right_eye = landmarks[1]
+    nose = landmarks[2]
+    
+    is_frontal = False
+    frontal_score = 0.0
+    
+    # Check if key landmarks are visible
+    if (left_eye['confidence'] >= MIN_LANDMARK_CONFIDENCE and 
+        right_eye['confidence'] >= MIN_LANDMARK_CONFIDENCE and
+        nose['confidence'] >= MIN_LANDMARK_CONFIDENCE):
+        
+        # Calculate eye distance (baseline)
+        eye_distance = math.sqrt((right_eye['x'] - left_eye['x'])**2 + (right_eye['y'] - left_eye['y'])**2)
+        
+        if eye_distance > 0:
+            # Calculate eyes center
+            eyes_center_x = (left_eye['x'] + right_eye['x']) / 2.0
+            
+            # Check if nose is centered between eyes (frontal face indicator)
+            # Nose should be within 30% of eye distance from center
+            nose_offset = abs(nose['x'] - eyes_center_x)
+            max_offset = eye_distance * 0.3
+            
+            # Calculate frontal score based on nose position
+            if nose_offset <= max_offset:
+                frontal_score = 1.0 - (nose_offset / max_offset)
+            else:
+                frontal_score = 0.0
+            
+            # Determine if face is frontal
+            is_frontal = frontal_score >= MIN_FRONTAL_SCORE
+    
+    # Calculate overall quality score
+    quality_score = (
+        avg_confidence * 0.5 +      # 50% weight on landmark confidence
+        frontal_score * 0.5          # 50% weight on frontal detection
+    )
+    
+    quality_metrics = {
+        'is_frontal': is_frontal,
+        'visible_landmarks': visible_count,
+        'total_landmarks': len(landmarks),
+        'avg_confidence': round(avg_confidence, 3),
+        'quality_score': round(quality_score, 3),
+        'frontal_score': round(frontal_score, 3),
+    }
+    
+    # Good face criteria: sufficient landmarks, good quality, and frontal
+    is_good_face = (
+        visible_count >= MIN_VISIBLE_LANDMARKS and
+        quality_score >= FACE_QUALITY_THRESHOLD and
+        is_frontal
+    )
+    
+    return is_good_face, quality_score, quality_metrics
+
+
 def send_detection_to_kafka(frame_meta, obj_meta):
     """Send detection information to Kafka for new object IDs"""
     global kafka_producer, seen_object_ids
@@ -120,8 +211,6 @@ def send_detection_to_kafka(frame_meta, obj_meta):
     # Only send if this is a new object ID
     if object_id in seen_object_ids:
         return
-    
-    seen_object_ids.append(object_id)
     
     # Extract landmarks
     landmarks = []
@@ -142,6 +231,18 @@ def send_detection_to_kafka(frame_meta, obj_meta):
             "confidence": float(confidence)
         })
     
+    # Assess face quality
+    is_good_face, quality_score, quality_metrics = assess_face_quality(landmarks)
+    
+    # Optionally, only send good faces to Kafka
+    # Uncomment the following lines to filter out low-quality faces:
+    # if not is_good_face:
+    #     sys.stdout.write(f"DEBUG - Skipping low-quality face (ID: {object_id}, quality: {quality_score:.3f})\n")
+    #     return
+    
+    # Mark as seen regardless of quality
+    seen_object_ids.append(object_id)
+    
     # Prepare detection data
     detection_data = {
         "timestamp": time.time(),
@@ -155,6 +256,11 @@ def send_detection_to_kafka(frame_meta, obj_meta):
             "height": obj_meta.rect_params.height
         },
         "landmarks": landmarks,
+        "face_quality": {
+            "is_good_face": is_good_face,
+            "quality_score": quality_score,
+            **quality_metrics
+        },
         "frame_number": frame_meta.frame_num,
         "source_id": frame_meta.source_id
     }
@@ -164,7 +270,8 @@ def send_detection_to_kafka(frame_meta, obj_meta):
         future = kafka_producer.send(KAFKA_TOPIC, value=detection_data)
         # Optionally wait for confirmation (with timeout)
         record_metadata = future.get(timeout=1)
-        sys.stdout.write(f"DEBUG - Sent detection for new obj ID {object_id} at frame {frame_meta.frame_num} with {len(landmarks)} landmarks to Kafka {KAFKA_TOPIC} (partition: {record_metadata.partition}, offset: {record_metadata.offset})\n")
+        quality_status = "GOOD" if is_good_face else "POOR"
+        sys.stdout.write(f"DEBUG - Sent {quality_status} face detection (ID: {object_id}, quality: {quality_score:.3f}, frame: {frame_meta.frame_num}, landmarks: {quality_metrics['visible_landmarks']}/{quality_metrics['total_landmarks']}) to Kafka {KAFKA_TOPIC}\n")
     except KafkaError as e:
         sys.stderr.write(f"ERROR - Failed to send to Kafka: {e}\n")
     except Exception as e:
@@ -410,7 +517,7 @@ def main():
 
     nvvidconv = Gst.ElementFactory.make("nvvideoconvert", "nvvidconv")
     if not nvvidconv or pipeline.add(nvvidconv):
-        sys.stderr.write("ERROR - Failed to create nvvideoconvert\n")
+        sys.stderr.write("ERROR - Failed to create nvvidconv\n")
         return -1
 
     capsfilter = Gst.ElementFactory.make("capsfilter", "capsfilter")

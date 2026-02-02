@@ -18,7 +18,8 @@ try:
     consumer = KafkaConsumer(
         'face-detections',
         bootstrap_servers='localhost:9092',
-        auto_offset_reset='earliest',  # Start from beginning
+        #auto_offset_reset='earliest',  # Start from beginning
+        auto_offset_reset='latest',   # Start from latest
         enable_auto_commit=True,
         value_deserializer=lambda x: json.loads(x.decode('utf-8'))
     )
@@ -42,9 +43,22 @@ try:
               f"{detection['bbox']['width']:.0f}, {detection['bbox']['height']:.0f}]")
         print(f"Frame: {detection['frame_number']}, Source: {detection['source_id']}")
         
+        # Display face quality metrics
+        if 'face_quality' in detection:
+            quality = detection['face_quality']
+            quality_status = "✓ GOOD" if quality.get('is_good_face', False) else "✗ POOR"
+            frontal_status = "✓ FRONTAL" if quality.get('is_frontal', False) else "✗ NON-FRONTAL"
+            
+            print(f"\nFace Quality: {quality_status}")
+            print(f"  Frontal Detection: {frontal_status}") 
+            print(f"  Visible Landmarks: {quality.get('visible_landmarks', 0)}/{quality.get('total_landmarks', 0)}")
+            print(f"  Avg Confidence: {quality.get('avg_confidence', 0):.3f}")
+            print(f"  Overall Score: {quality.get('quality_score', 0):.3f}")
+            print(f"  Frontal Score: {quality.get('frontal_score', 0):.3f}")
+        
         # Display landmarks with labels
         if 'landmarks' in detection and detection['landmarks']:
-            print(f"Landmarks ({len(detection['landmarks'])} points):")
+            print(f"\nLandmarks ({len(detection['landmarks'])} points):")
             for idx, landmark in enumerate(detection['landmarks']):
                 label = LANDMARK_LABELS.get(idx, f"Point {idx}")
                 print(f"  {label}: x={landmark['x']:.1f}, y={landmark['y']:.1f}, conf={landmark['confidence']:.2f}")
