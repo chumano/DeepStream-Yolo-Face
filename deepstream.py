@@ -114,6 +114,9 @@ class DelayedBestQualitySendStrategy(SendStrategy):
             if sent_record is not None and detection.quality_score <= sent_record.quality_score:
                 return False, f"not better than already sent ({sent_record.quality_score:.3f})"
         
+        if detection.detection_data.get("face_quality", {}).get("is_good_face") is not True:
+            return False, "face quality not good"
+
         return True, "queued for delayed send"
     
     def should_send(self, detection: Detection, current_time: float) -> Tuple[bool, str]:
@@ -581,18 +584,18 @@ def set_custom_bbox(obj_meta):
     obj_meta.text_params.text_bg_clr.alpha = 1.0
 
 
-def assess_face_quality(landmarks):
+def assess_face_quality(landmarks, bbox=None):
     """
-    Assess face quality based on landmarks, focusing on frontal face detection.
+    Assess face quality based on landmarks and bounding box area, focusing on frontal face detection.
     Allows head tilt but detects face rotation (yaw).
     Returns: (is_good_face, quality_score, quality_metrics)
     """
     if not landmarks or len(landmarks) < 5:
         return False, 0.0, {}
-    
+
     # Count visible landmarks
     visible_count = sum(1 for lm in landmarks if lm['confidence'] >= MIN_LANDMARK_CONFIDENCE)
-    
+
     if visible_count < MIN_VISIBLE_LANDMARKS:
         return False, 0.0, {
             'visible_landmarks': visible_count,
@@ -600,51 +603,72 @@ def assess_face_quality(landmarks):
             'avg_confidence': 0.0,
             'is_frontal': False
         }
-    
+
     # Calculate average confidence
     visible_confidences = [lm['confidence'] for lm in landmarks if lm['confidence'] >= MIN_LANDMARK_CONFIDENCE]
     avg_confidence = sum(visible_confidences) / len(visible_confidences)
-    
+
     # Extract key landmarks (5-point: left_eye, right_eye, nose, left_mouth, right_mouth)
     left_eye = landmarks[0]
     right_eye = landmarks[1]
     nose = landmarks[2]
-    
+
     is_frontal = False
     frontal_score = 0.0
-    
+
     # Check if key landmarks are visible
     if (left_eye['confidence'] >= MIN_LANDMARK_CONFIDENCE and 
         right_eye['confidence'] >= MIN_LANDMARK_CONFIDENCE and
         nose['confidence'] >= MIN_LANDMARK_CONFIDENCE):
-        
+
         # Calculate eye distance (baseline)
         eye_distance = math.sqrt((right_eye['x'] - left_eye['x'])**2 + (right_eye['y'] - left_eye['y'])**2)
-        
+
         if eye_distance > 0:
             # Calculate eyes center
             eyes_center_x = (left_eye['x'] + right_eye['x']) / 2.0
-            
+
             # Check if nose is centered between eyes (frontal face indicator)
             # Nose should be within 30% of eye distance from center
             nose_offset = abs(nose['x'] - eyes_center_x)
             max_offset = eye_distance * 0.3
-            
+
             # Calculate frontal score based on nose position
             if nose_offset <= max_offset:
                 frontal_score = 1.0 - (nose_offset / max_offset)
             else:
                 frontal_score = 0.0
-            
+
             # Determine if face is frontal
             is_frontal = frontal_score >= MIN_FRONTAL_SCORE
-    
+
+    # --- Add box area penalty ---
+    box_area_score = 1.0
+    min_box_area = 50 * 50  # Minimum area for a good face (configurable)
+    max_box_area = STREAMMUX_WIDTH * STREAMMUX_HEIGHT
+    if bbox is not None:
+        width = bbox.get('width', 0)
+        height = bbox.get('height', 0)
+        area = width * height
+        # Penalize if area is too small
+        if area < min_box_area:
+            box_area_score = max(0.0, area / min_box_area)
+        else:
+            # Optionally, penalize if area is too large (very close face)
+            box_area_score = min(1.0, area / (max_box_area * 0.4))
+            box_area_score = max(box_area_score, 0.5)  # Don't penalize too much for large faces
+
     # Calculate overall quality score
+    landmarks_weighted = 0.2  # Weight for landmarks confidence
+    frontal_weighted = 0.5    # Weight for frontal detection
+    box_area_weighted = 0.3   # Weight for box area
+
     quality_score = (
-        avg_confidence * 0.5 +      # 50% weight on landmark confidence
-        frontal_score * 0.5          # 50% weight on frontal detection
+        avg_confidence * landmarks_weighted +
+        frontal_score * frontal_weighted +
+        box_area_score * box_area_weighted
     )
-    
+
     quality_metrics = {
         'is_frontal': is_frontal,
         'visible_landmarks': visible_count,
@@ -652,15 +676,17 @@ def assess_face_quality(landmarks):
         'avg_confidence': round(avg_confidence, 3),
         'quality_score': round(quality_score, 3),
         'frontal_score': round(frontal_score, 3),
+        'box_area_score': round(box_area_score, 3),
     }
-    
+
     # Good face criteria: sufficient landmarks, good quality, and frontal
     is_good_face = (
         visible_count >= MIN_VISIBLE_LANDMARKS and
         quality_score >= FACE_QUALITY_THRESHOLD and
-        is_frontal
+        is_frontal and
+        box_area_score >= 0.5
     )
-    
+
     return is_good_face, quality_score, quality_metrics
 
 
@@ -674,10 +700,11 @@ def crop_face_from_frame(frame_image, bbox, padding_ratio=0.2):
         padding_ratio: ratio of padding to add around the face (default 0.2 = 20%)
     
     Returns:
-        face_image_base64: base64 encoded JPEG image string, or None if failed
+        tuple: (face_image_base64, crop_bbox) where crop_bbox contains actual crop coordinates with padding
+               or (None, None) if failed
     """
     if frame_image is None:
-        return None
+        return None, None
     
     try:
         h, w = frame_image.shape[:2]
@@ -702,7 +729,7 @@ def crop_face_from_frame(frame_image, bbox, padding_ratio=0.2):
         face_crop = frame_image[y1:y2, x1:x2]
         
         if face_crop.size == 0:
-            return None
+            return None, None
         
         # Convert to BGR if needed (DeepStream uses RGBA)
         if face_crop.shape[2] == 4:
@@ -715,64 +742,78 @@ def crop_face_from_frame(frame_image, bbox, padding_ratio=0.2):
         # Convert to base64
         face_base64 = base64.b64encode(buffer).decode('utf-8')
         
-        return face_base64
+        # Return both the image and the actual crop bbox (with padding)
+        crop_bbox = {
+            'left': x1,
+            'top': y1,
+            'width': x2 - x1,
+            'height': y2 - y1
+        }
+        
+        return face_base64, crop_bbox
     
     except Exception as e:
         sys.stderr.write(f"ERROR - Failed to crop face: {e}\n")
-        return None
+        return None, None
 
 
 def send_detection_to_kafka(frame_meta, obj_meta, frame_image=None):
     """Queue detection for sending via DetectionManager"""
     global detection_manager
-    
+
     if detection_manager is None or not detection_manager.enabled:
         return
-    
+
     object_id = obj_meta.object_id
-    
+
     # Extract landmarks
     landmarks = []
     num_joints = int(obj_meta.mask_params.size / (sizeof(c_float) * 3))
     gain = min(obj_meta.mask_params.width / STREAMMUX_WIDTH, obj_meta.mask_params.height / STREAMMUX_HEIGHT)
     pad_x = (obj_meta.mask_params.width - STREAMMUX_WIDTH * gain) * 0.5
     pad_y = (obj_meta.mask_params.height - STREAMMUX_HEIGHT * gain) * 0.5
-    
+
     for i in range(num_joints):
         data = obj_meta.mask_params.get_mask_array()
         xc = (data[i * 3 + 0] - pad_x) / gain
         yc = (data[i * 3 + 1] - pad_y) / gain
         confidence = data[i * 3 + 2]
-        
+
         landmarks.append({
             "x": float(xc),
             "y": float(yc),
             "confidence": float(confidence)
         })
-    
-    # Assess face quality
-    is_good_face, quality_score, quality_metrics = assess_face_quality(landmarks)
-    
-    # Get bbox for cropping
+
+    # Get bbox for cropping and quality
     bbox = {
         "left": obj_meta.rect_params.left,
         "top": obj_meta.rect_params.top,
         "width": obj_meta.rect_params.width,
         "height": obj_meta.rect_params.height
     }
-    
+
+    # Assess face quality (pass bbox)
+    is_good_face, quality_score, quality_metrics = assess_face_quality(landmarks, bbox=bbox)
+
     # Crop face and encode as base64
     face_image_base64 = None
+    crop_bbox = None
+    frame_image_size = None
     if frame_image is not None:
-        face_image_base64 = crop_face_from_frame(frame_image, bbox)
-    
+        face_image_base64, crop_bbox = crop_face_from_frame(frame_image, bbox)
+        frame_image_size = frame_image.shape[0:2]  # (H, W)
+        frame_image_size = { 'width': frame_image_size[1], 'height': frame_image_size[0]}
+
     # Prepare detection data
     detection_data = {
         "timestamp": time.time(),
         "object_id": object_id,
         "class_id": obj_meta.class_id,
         "confidence": obj_meta.confidence,
+        "frame_size": frame_image_size,
         "bbox": bbox,
+        "crop_bbox": crop_bbox,  # Add crop bbox with padding
         "landmarks": landmarks,
         "face_quality": {
             "is_good_face": is_good_face,
@@ -880,7 +921,11 @@ def nvosd_sink_pad_buffer_probe(pad, info, user_data):
         # Extract frame image for face cropping (only if Kafka is enabled)
         frame_image = None
         if detection_manager is not None and detection_manager.enabled:
-            frame_image = get_frame_image(gst_buffer, frame_meta)
+            try:
+                frame_image = get_frame_image(gst_buffer, frame_meta)
+            except Exception as e:
+                sys.stderr.write(f"ERROR - Failed to extract frame image: {e}\n")
+                frame_image = None
 
         l_obj = frame_meta.obj_meta_list
         while l_obj is not None:
@@ -889,9 +934,12 @@ def nvosd_sink_pad_buffer_probe(pad, info, user_data):
             except StopIteration:
                 break
 
-            parse_face_from_meta(batch_meta, frame_meta, obj_meta)
-            set_custom_bbox(obj_meta)
-            send_detection_to_kafka(frame_meta, obj_meta, frame_image)
+            try:
+                parse_face_from_meta(batch_meta, frame_meta, obj_meta)
+                set_custom_bbox(obj_meta)
+                send_detection_to_kafka(frame_meta, obj_meta, frame_image)
+            except Exception as e:
+                sys.stderr.write(f"ERROR - Failed to process object metadata: {e}\n")
 
             try:
                 l_obj = l_obj.next
@@ -1118,8 +1166,14 @@ def main():
     nvstreammux.set_property("width", STREAMMUX_WIDTH)
     nvstreammux.set_property("height", STREAMMUX_HEIGHT)
     nvstreammux.set_property("live-source", 1)
+    # Add buffer pool size to reduce memory pressure
+    nvstreammux.set_property("buffer-pool-size", 4)
+    
     nvinfer.set_property("config-file-path", INFER_CONFIG)
     nvinfer.set_property("qos", 0)
+    # Reduce batch size for inference to reduce memory usage
+    nvinfer.set_property("batch-size", 1)
+    
     nvtracker.set_property("tracker-width", 640)
     nvtracker.set_property("tracker-height", 384)
     nvtracker.set_property("ll-lib-file", "/opt/nvidia/deepstream/deepstream/lib/libnvds_nvmultiobjecttracker.so")
@@ -1177,8 +1231,10 @@ def main():
 
     try:
         loop.run()
-    except:
-        pass
+    except KeyboardInterrupt:
+        sys.stdout.write("\nINFO - Interrupted by user\n")
+    except Exception as e:
+        sys.stderr.write(f"ERROR - Unexpected error in main loop: {e}\n")
 
     pipeline.set_state(Gst.State.NULL)
     
@@ -1203,7 +1259,7 @@ def parse_args():
     parser.add_argument("--kafka-broker", help="Kafka broker address (e.g., localhost:9092)")
     parser.add_argument("--kafka-topic", default="face-detections", help="Kafka topic name (default: face-detections)")
     parser.add_argument("--kafka-delay", type=float, default=2.0, help="Delay in seconds before sending to Kafka (default: 2.0)")
-    parser.add_argument("--kafka-quality-threshold", type=float, default=0.1, help="Minimum quality improvement to resend (default: 0.1)")
+    parser.add_argument("--kafka-quality-threshold", type=float, default=0.005, help="Minimum quality improvement to resend (default: 0.005)")
     args = parser.parse_args()
 
     if args.source == "":
