@@ -2,6 +2,7 @@ from kafka import KafkaConsumer
 from kafka.errors import KafkaError
 import json
 import sys
+import time
 
 # Landmark labels for face keypoints (typical 5-point configuration)
 # Adjust based on your model's output format
@@ -32,7 +33,16 @@ except KafkaError as e:
     sys.exit(1)
 
 try:
+    # Initialize statistics
+    message_count = 0
+    start_time = time.time()
+    last_stats_time = start_time
+    stats_interval = 5  # Print stats every 5 seconds
+    
     for message in consumer:
+        message_count += 1
+        current_time = time.time()
+        
         detection = message.value
         print(f"\n--- New Face Detection ---")
         print(f"Partition: {message.partition}, Offset: {message.offset}")
@@ -63,8 +73,31 @@ try:
                 label = LANDMARK_LABELS.get(idx, f"Point {idx}")
                 print(f"  {label}: x={landmark['x']:.1f}, y={landmark['y']:.1f}, conf={landmark['confidence']:.2f}")
         
+        # Print statistics periodically
+        elapsed_since_stats = current_time - last_stats_time
+        if elapsed_since_stats >= stats_interval:
+            total_elapsed = current_time - start_time
+            avg_msg_per_sec = message_count / total_elapsed if total_elapsed > 0 else 0
+            recent_msg_per_sec = (message_count - (message_count - stats_interval * avg_msg_per_sec)) / elapsed_since_stats if elapsed_since_stats > 0 else 0
+            
+            print(f"\n{'='*50}")
+            print(f"STATISTICS:")
+            print(f"  Total Messages: {message_count}")
+            print(f"  Total Time: {total_elapsed:.1f}s")
+            print(f"  Average Rate: {avg_msg_per_sec:.2f} msg/s")
+            print(f"{'='*50}")
+            last_stats_time = current_time
+        
 except KeyboardInterrupt:
     print("\nStopping consumer...")
+    # Print final statistics
+    total_time = time.time() - start_time
+    if total_time > 0:
+        avg_rate = message_count / total_time
+        print(f"\nFINAL STATISTICS:")
+        print(f"  Total Messages: {message_count}")
+        print(f"  Total Time: {total_time:.1f}s")
+        print(f"  Average Rate: {avg_rate:.2f} msg/s")
 except Exception as e:
     print(f"ERROR - {e}")
 finally:
