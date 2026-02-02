@@ -8,15 +8,471 @@ import time
 import argparse
 import platform
 import json
+from abc import ABC, abstractmethod
 from threading import Lock
 from ctypes import sizeof, c_float
 from collections import deque
+from typing import Dict, Optional, Any, List, Tuple
+from dataclasses import dataclass
+from enum import Enum
+import math
+
 from kafka import KafkaProducer
 from kafka.errors import KafkaError
-import math
 
 sys.path.append("/opt/nvidia/deepstream/deepstream/lib")
 import pyds
+
+
+# =============================================================================
+# Detection Manager Classes
+# =============================================================================
+
+class SendResult(Enum):
+    """Result of a send operation"""
+    SUCCESS = "success"
+    SKIPPED = "skipped"
+    FAILED = "failed"
+    PENDING = "pending"
+
+
+@dataclass
+class Detection:
+    """Represents a face detection with metadata"""
+    object_id: int
+    detection_data: Dict[str, Any]
+    quality_score: float
+    timestamp: float
+    is_resend: bool = False
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return self.detection_data
+
+
+@dataclass
+class DetectionRecord:
+    """Record of a sent detection"""
+    object_id: int
+    quality_score: float
+    sent_timestamp: float
+    send_count: int = 1
+    last_seen_timestamp: float = 0.0  # Track when object was last seen
+    
+    def __post_init__(self):
+        if self.last_seen_timestamp == 0.0:
+            self.last_seen_timestamp = self.sent_timestamp
+
+
+class SendStrategy(ABC):
+    """Abstract base class for detection sending strategies"""
+    
+    @abstractmethod
+    def should_queue(self, detection: Detection, 
+                     pending: Optional[Detection],
+                     sent_record: Optional[DetectionRecord]) -> Tuple[bool, str]:
+        pass
+    
+    @abstractmethod
+    def should_send(self, detection: Detection, current_time: float) -> Tuple[bool, str]:
+        pass
+    
+    @abstractmethod
+    def on_new_detection(self, detection: Detection,
+                         pending: Optional[Detection]) -> Optional[Detection]:
+        pass
+
+
+class DelayedBestQualitySendStrategy(SendStrategy):
+    """
+    Strategy that waits for a configurable delay and sends the best quality detection.
+    Allows resending if quality improves significantly.
+    """
+    
+    def __init__(self, delay_sec: float = 2.0, quality_improvement_threshold: float = 0.1):
+        self.delay_sec = delay_sec
+        self.quality_improvement_threshold = quality_improvement_threshold
+    
+    def should_queue(self, detection: Detection,
+                     pending: Optional[Detection],
+                     sent_record: Optional[DetectionRecord]) -> Tuple[bool, str]:
+        # If already sent, only allow if quality improves significantly
+        if sent_record is not None:
+            improvement = detection.quality_score - sent_record.quality_score
+            # Reject if quality is worse or improvement is insufficient
+            if improvement < self.quality_improvement_threshold:
+                return False, f"insufficient improvement ({improvement:.3f} < {self.quality_improvement_threshold})"
+        
+        # If there's a pending detection, only replace if new one is better
+        if pending is not None:
+            if detection.quality_score <= pending.quality_score:
+                return False, f"pending has better quality ({pending.quality_score:.3f} >= {detection.quality_score:.3f})"
+            # Also check: if we have both sent_record and pending, ensure new detection
+            # is still better than sent_record (pending might have been queued before sent)
+            if sent_record is not None and detection.quality_score <= sent_record.quality_score:
+                return False, f"not better than already sent ({sent_record.quality_score:.3f})"
+        
+        return True, "queued for delayed send"
+    
+    def should_send(self, detection: Detection, current_time: float) -> Tuple[bool, str]:
+        elapsed = current_time - detection.timestamp
+        if elapsed >= self.delay_sec:
+            return True, f"delay elapsed ({elapsed:.2f}s >= {self.delay_sec}s)"
+        return False, f"waiting ({elapsed:.2f}s < {self.delay_sec}s)"
+    
+    def on_new_detection(self, detection: Detection,
+                         pending: Optional[Detection]) -> Optional[Detection]:
+        if pending is not None:
+            # Giữ timestamp gốc để delay được tính từ detection đầu tiên
+            detection.timestamp = pending.timestamp
+            # Giữ is_resend flag từ detection gốc
+            detection.is_resend = pending.is_resend
+        return detection
+
+
+class ImmediateSendStrategy(SendStrategy):
+    """Strategy that sends detections immediately without delay."""
+    
+    def __init__(self, quality_improvement_threshold: float = 0.1):
+        self.quality_improvement_threshold = quality_improvement_threshold
+    
+    def should_queue(self, detection: Detection,
+                     pending: Optional[Detection],
+                     sent_record: Optional[DetectionRecord]) -> Tuple[bool, str]:
+        if sent_record is not None:
+            improvement = detection.quality_score - sent_record.quality_score
+            if improvement < self.quality_improvement_threshold:
+                return False, f"already sent with similar quality"
+        return True, "queued for immediate send"
+    
+    def should_send(self, detection: Detection, current_time: float) -> Tuple[bool, str]:
+        return True, "immediate send"
+    
+    def on_new_detection(self, detection: Detection,
+                         pending: Optional[Detection]) -> Optional[Detection]:
+        return detection
+
+
+class KafkaSender:
+    """Handles Kafka connection and message sending"""
+    
+    def __init__(self, broker: str, topic: str):
+        self.broker = broker
+        self.topic = topic
+        self.producer: Optional[KafkaProducer] = None
+    
+    def connect(self) -> bool:
+        try:
+            self.producer = KafkaProducer(
+                bootstrap_servers=self.broker,
+                value_serializer=lambda v: json.dumps(v).encode('utf-8'),
+                acks=1,
+                compression_type='gzip',
+                linger_ms=10,
+                request_timeout_ms=30000,
+                retries=3
+            )
+            self.producer.bootstrap_connected()
+            sys.stdout.write(f"INFO - Kafka producer initialized (broker: {self.broker}, topic: {self.topic})\n")
+            return True
+        except Exception as e:
+            sys.stderr.write(f"ERROR - Failed to initialize Kafka producer: {e}\n")
+            self.producer = None
+            return False
+    
+    def send(self, data: Dict[str, Any], timeout: float = 1.0) -> SendResult:
+        if self.producer is None:
+            return SendResult.FAILED
+        
+        try:
+            future = self.producer.send(self.topic, value=data)
+            future.get(timeout=timeout)
+            return SendResult.SUCCESS
+        except KafkaError as e:
+            sys.stderr.write(f"ERROR - Failed to send to Kafka: {e}\n")
+            return SendResult.FAILED
+        except Exception as e:
+            sys.stderr.write(f"ERROR - Unexpected error sending to Kafka: {e}\n")
+            return SendResult.FAILED
+    
+    def close(self):
+        if self.producer is not None:
+            try:
+                self.producer.flush()
+                self.producer.close()
+                sys.stdout.write("INFO - Kafka producer closed\n")
+            except Exception as e:
+                sys.stderr.write(f"ERROR - Failed to close Kafka producer: {e}\n")
+
+
+class DetectionStore:
+    """Thread-safe storage for pending and sent detections"""
+    
+    def __init__(self, sent_record_ttl_sec: float = 60.0, pending_ttl_sec: float = 10.0):
+        self._pending: Dict[int, Detection] = {}
+        self._sent: Dict[int, DetectionRecord] = {}
+        self._pending_lock = Lock()
+        self._sent_lock = Lock()
+        self.sent_record_ttl_sec = sent_record_ttl_sec  # TTL for sent records
+        self.pending_ttl_sec = pending_ttl_sec  # TTL for pending detections
+    
+    def get_pending(self, object_id: int) -> Optional[Detection]:
+        with self._pending_lock:
+            return self._pending.get(object_id)
+    
+    def set_pending(self, detection: Detection):
+        with self._pending_lock:
+            self._pending[detection.object_id] = detection
+    
+    def remove_pending(self, object_id: int) -> Optional[Detection]:
+        with self._pending_lock:
+            return self._pending.pop(object_id, None)
+    
+    def get_all_pending(self) -> List[Detection]:
+        with self._pending_lock:
+            return list(self._pending.values())
+    
+    def get_pending_ids_to_send(self, check_fn) -> List[int]:
+        with self._pending_lock:
+            return [d.object_id for d in self._pending.values() if check_fn(d)]
+    
+    def get_sent(self, object_id: int) -> Optional[DetectionRecord]:
+        with self._sent_lock:
+            return self._sent.get(object_id)
+    
+    def record_sent(self, detection: Detection):
+        with self._sent_lock:
+            existing = self._sent.get(detection.object_id)
+            send_count = (existing.send_count + 1) if existing else 1
+            current_time = time.time()
+            self._sent[detection.object_id] = DetectionRecord(
+                object_id=detection.object_id,
+                quality_score=detection.quality_score,
+                sent_timestamp=current_time,
+                send_count=send_count,
+                last_seen_timestamp=current_time
+            )
+    
+    def update_last_seen(self, object_id: int):
+        """Update last seen timestamp for an object"""
+        with self._sent_lock:
+            if object_id in self._sent:
+                self._sent[object_id].last_seen_timestamp = time.time()
+    
+    def cleanup_stale_records(self) -> Tuple[int, int]:
+        """Remove stale records that haven't been seen for TTL duration.
+        Returns: (removed_sent_count, removed_pending_count)
+        """
+        current_time = time.time()
+        removed_sent = 0
+        removed_pending = 0
+        
+        # Cleanup sent records
+        with self._sent_lock:
+            stale_ids = [
+                oid for oid, record in self._sent.items()
+                if (current_time - record.last_seen_timestamp) > self.sent_record_ttl_sec
+            ]
+            for oid in stale_ids:
+                del self._sent[oid]
+                removed_sent += 1
+        
+        # Cleanup pending detections
+        with self._pending_lock:
+            stale_pending_ids = [
+                oid for oid, detection in self._pending.items()
+                if (current_time - detection.timestamp) > self.pending_ttl_sec
+            ]
+            for oid in stale_pending_ids:
+                del self._pending[oid]
+                removed_pending += 1
+        
+        return removed_sent, removed_pending
+    
+    def get_store_size(self) -> Tuple[int, int]:
+        """Get current size of stores. Returns: (pending_count, sent_count)"""
+        with self._pending_lock:
+            pending_count = len(self._pending)
+        with self._sent_lock:
+            sent_count = len(self._sent)
+        return pending_count, sent_count
+    
+    def clear(self):
+        with self._pending_lock:
+            self._pending.clear()
+        with self._sent_lock:
+            self._sent.clear()
+
+
+class DetectionManager:
+    """Main manager class for handling face detections."""
+    
+    def __init__(self, sender: Optional[KafkaSender] = None, 
+                 strategy: Optional[SendStrategy] = None,
+                 enabled: bool = True,
+                 sent_record_ttl_sec: float = 60.0,
+                 pending_ttl_sec: float = 10.0,
+                 cleanup_interval_sec: float = 30.0):
+        self.sender = sender
+        self.strategy = strategy or DelayedBestQualitySendStrategy()
+        self.store = DetectionStore(sent_record_ttl_sec, pending_ttl_sec)
+        self.enabled = enabled
+        self.cleanup_interval_sec = cleanup_interval_sec
+        self._last_cleanup_time = time.time()
+        self._stats = {'queued': 0, 'sent': 0, 'skipped': 0, 'failed': 0, 'resent': 0, 'cleaned_sent': 0, 'cleaned_pending': 0}
+        self._stats_lock = Lock()
+    
+    def configure(self, broker: str, topic: str, strategy: SendStrategy):
+        self.sender = KafkaSender(broker, topic)
+        self.strategy = strategy
+        self.enabled = True
+    
+    def initialize(self) -> bool:
+        if not self.enabled or self.sender is None:
+            return False
+        return self.sender.connect()
+    
+    def shutdown(self):
+        if self.sender is not None:
+            self.sender.close()
+    
+    def queue_detection(self, detection_data: Dict[str, Any], 
+                        quality_score: float,
+                        object_id: int) -> SendResult:
+        if not self.enabled:
+            return SendResult.SKIPPED
+        
+        current_time = time.time()
+        sent_record = self.store.get_sent(object_id)
+        is_resend = sent_record is not None
+        
+        # Update last seen time if we have a sent record
+        if sent_record is not None:
+            self.store.update_last_seen(object_id)
+        
+        detection = Detection(
+            object_id=object_id,
+            detection_data=detection_data,
+            quality_score=quality_score,
+            timestamp=current_time,
+            is_resend=is_resend
+        )
+        
+        pending = self.store.get_pending(object_id)
+        should_queue, reason = self.strategy.should_queue(detection, pending, sent_record)
+        
+        if not should_queue:
+            self._increment_stat('skipped')
+            return SendResult.SKIPPED
+        
+        processed = self.strategy.on_new_detection(detection, pending)
+        if processed is not None:
+            self.store.set_pending(processed)
+            action = "Updated" if pending else "Queued"
+            sys.stdout.write(f"DEBUG - {action} detection (ID: {object_id}, quality: {quality_score:.3f})\n")
+            self._increment_stat('queued')
+            return SendResult.PENDING
+        
+        return SendResult.SKIPPED
+    
+    def process_pending(self) -> int:
+        if not self.enabled or self.sender is None:
+            return 0
+        
+        current_time = time.time()
+        
+        # Periodic cleanup
+        if (current_time - self._last_cleanup_time) >= self.cleanup_interval_sec:
+            self._perform_cleanup()
+            self._last_cleanup_time = current_time
+        
+        def is_ready(d: Detection) -> bool:
+            ready, _ = self.strategy.should_send(d, current_time)
+            return ready
+        
+        ready_ids = self.store.get_pending_ids_to_send(is_ready)
+        sent_count = 0
+        
+        for object_id in ready_ids:
+            detection = self.store.remove_pending(object_id)
+            if detection is None:
+                continue
+            
+            # Re-check if this detection should still be sent
+            # (in case a better one was already sent while this was pending)
+            sent_record = self.store.get_sent(object_id)
+            if sent_record is not None:
+                improvement = detection.quality_score - sent_record.quality_score
+                if improvement < self.strategy.quality_improvement_threshold:
+                    sys.stdout.write(
+                        f"DEBUG - Skipping pending detection (ID: {object_id}, "
+                        f"quality: {detection.quality_score:.3f}) - already sent better "
+                        f"({sent_record.quality_score:.3f})\n"
+                    )
+                    self._increment_stat('skipped')
+                    continue
+            
+            result = self._send_detection(detection)
+            if result == SendResult.SUCCESS:
+                sent_count += 1
+        
+        return sent_count
+    
+    def _send_detection(self, detection: Detection) -> SendResult:
+        result = self.sender.send(detection.to_dict())
+        
+        if result == SendResult.SUCCESS:
+            self.store.record_sent(detection)
+            
+            quality_data = detection.detection_data.get("face_quality", {})
+            quality_status = "GOOD" if quality_data.get("is_good_face") else "POOR"
+            resend_str = " (RESEND)" if detection.is_resend else ""
+            
+            sys.stdout.write(
+                f"DEBUG - Sent {quality_status} face detection{resend_str} "
+                f"(ID: {detection.object_id}, quality: {detection.quality_score:.3f}, "
+                f"frame: {detection.detection_data.get('frame_number', 'N/A')}, "
+                f"landmarks: {quality_data.get('visible_landmarks', 0)}/"
+                f"{quality_data.get('total_landmarks', 0)}) "
+                f"to Kafka {self.sender.topic}\n"
+            )
+            
+            self._increment_stat('resent' if detection.is_resend else 'sent')
+        else:
+            self._increment_stat('failed')
+        
+        return result
+    
+    def _perform_cleanup(self):
+        """Perform cleanup of stale records"""
+        removed_sent, removed_pending = self.store.cleanup_stale_records()
+        
+        if removed_sent > 0 or removed_pending > 0:
+            with self._stats_lock:
+                self._stats['cleaned_sent'] += removed_sent
+                self._stats['cleaned_pending'] += removed_pending
+            
+            pending_count, sent_count = self.store.get_store_size()
+            sys.stdout.write(
+                f"DEBUG - Cleanup: removed {removed_sent} sent records, "
+                f"{removed_pending} pending. Store size: {pending_count} pending, {sent_count} sent\n"
+            )
+    
+    def _increment_stat(self, stat: str):
+        with self._stats_lock:
+            self._stats[stat] = self._stats.get(stat, 0) + 1
+    
+    def get_stats(self) -> Dict[str, int]:
+        with self._stats_lock:
+            return self._stats.copy()
+    
+    def process_pending_callback(self) -> bool:
+        self.process_pending()
+        return True
+
+
+# =============================================================================
+# DeepStream Application
+# =============================================================================
 
 MAX_ELEMENTS_IN_DISPLAY_META = 16
 
@@ -33,17 +489,23 @@ JETSON = False
 KAFKA_BROKER = ""
 KAFKA_TOPIC = "face-detections"
 KAFKA_ENABLED = False
+KAFKA_SEND_DELAY_SEC = 2.0
+KAFKA_QUALITY_IMPROVEMENT_THRESHOLD = 0.1
+KAFKA_SENT_RECORD_TTL_SEC = 60.0  # How long to keep sent records
+KAFKA_PENDING_TTL_SEC = 10.0  # How long to keep pending detections
+KAFKA_CLEANUP_INTERVAL_SEC = 30.0  # How often to run cleanup
 
 # Face quality thresholds
-MIN_LANDMARK_CONFIDENCE = 0.5  # Minimum confidence for a landmark to be valid
-MIN_VISIBLE_LANDMARKS = 3      # Minimum number of visible landmarks for a "good" face
-FACE_QUALITY_THRESHOLD = 0.6   # Minimum quality score (0-1) to send to Kafka
-MAX_HEAD_ROTATION_ANGLE = 25.0 # Maximum head rotation angle (degrees) for frontal face
-MIN_FRONTAL_SCORE = 0.7        # Minimum frontal score (0-1) for frontal face
+MIN_LANDMARK_CONFIDENCE = 0.5
+MIN_VISIBLE_LANDMARKS = 3
+FACE_QUALITY_THRESHOLD = 0.6
+MAX_HEAD_ROTATION_ANGLE = 25.0
+MIN_FRONTAL_SCORE = 0.7
 
 perf_struct = {}
-kafka_producer = None
-seen_object_ids = deque(maxlen=100)
+
+# Detection manager instance
+detection_manager: DetectionManager = None
 
 
 class GETFPS:
@@ -200,17 +662,13 @@ def assess_face_quality(landmarks):
 
 
 def send_detection_to_kafka(frame_meta, obj_meta):
-    """Send detection information to Kafka for new object IDs"""
-    global kafka_producer, seen_object_ids
+    """Queue detection for sending via DetectionManager"""
+    global detection_manager
     
-    if not KAFKA_ENABLED or kafka_producer is None:
+    if detection_manager is None or not detection_manager.enabled:
         return
     
     object_id = obj_meta.object_id
-    
-    # Only send if this is a new object ID
-    if object_id in seen_object_ids:
-        return
     
     # Extract landmarks
     landmarks = []
@@ -234,15 +692,6 @@ def send_detection_to_kafka(frame_meta, obj_meta):
     # Assess face quality
     is_good_face, quality_score, quality_metrics = assess_face_quality(landmarks)
     
-    # Optionally, only send good faces to Kafka
-    # Uncomment the following lines to filter out low-quality faces:
-    # if not is_good_face:
-    #     sys.stdout.write(f"DEBUG - Skipping low-quality face (ID: {object_id}, quality: {quality_score:.3f})\n")
-    #     return
-    
-    # Mark as seen regardless of quality
-    seen_object_ids.append(object_id)
-    
     # Prepare detection data
     detection_data = {
         "timestamp": time.time(),
@@ -265,17 +714,12 @@ def send_detection_to_kafka(frame_meta, obj_meta):
         "source_id": frame_meta.source_id
     }
     
-    try:
-        # Send to Kafka and get future
-        future = kafka_producer.send(KAFKA_TOPIC, value=detection_data)
-        # Optionally wait for confirmation (with timeout)
-        record_metadata = future.get(timeout=1)
-        quality_status = "GOOD" if is_good_face else "POOR"
-        sys.stdout.write(f"DEBUG - Sent {quality_status} face detection (ID: {object_id}, quality: {quality_score:.3f}, frame: {frame_meta.frame_num}, landmarks: {quality_metrics['visible_landmarks']}/{quality_metrics['total_landmarks']}) to Kafka {KAFKA_TOPIC}\n")
-    except KafkaError as e:
-        sys.stderr.write(f"ERROR - Failed to send to Kafka: {e}\n")
-    except Exception as e:
-        sys.stderr.write(f"ERROR - Unexpected error sending to Kafka: {e}\n")
+    # Queue via detection manager
+    detection_manager.queue_detection(
+        detection_data=detection_data,
+        quality_score=quality_score,
+        object_id=object_id
+    )
 
 
 def parse_face_from_meta(batch_meta, frame_meta, obj_meta):
@@ -440,48 +884,57 @@ def is_aarch64():
     return platform.uname()[4] == "aarch64"
 
 
-def init_kafka_producer():
-    """Initialize Kafka producer"""
-    global kafka_producer
+def init_detection_manager():
+    """Initialize the detection manager with configured strategy"""
+    global detection_manager
     
     if not KAFKA_ENABLED:
+        detection_manager = DetectionManager(enabled=False)
         return
     
-    try:
-        kafka_producer = KafkaProducer(
-            bootstrap_servers=KAFKA_BROKER,
-            value_serializer=lambda v: json.dumps(v).encode('utf-8'),
-            acks=1,  # Wait for leader acknowledgment
-            compression_type='gzip',
-            linger_ms=10,  # Batch messages for 10ms
-            request_timeout_ms=30000,
-            retries=3
-        )
-        # Test connection by getting metadata
-        kafka_producer.bootstrap_connected()
-        sys.stdout.write(f"INFO - Kafka producer initialized (broker: {KAFKA_BROKER}, topic: {KAFKA_TOPIC})\n")
-    except Exception as e:
-        sys.stderr.write(f"ERROR - Failed to initialize Kafka producer: {e}\n")
-        kafka_producer = None
-
-
-def cleanup_kafka_producer():
-    """Cleanup Kafka producer"""
-    global kafka_producer
+    # Create sender
+    sender = KafkaSender(KAFKA_BROKER, KAFKA_TOPIC)
     
-    if kafka_producer is not None:
-        try:
-            kafka_producer.flush()
-            kafka_producer.close()
-            sys.stdout.write("INFO - Kafka producer closed\n")
-        except Exception as e:
-            sys.stderr.write(f"ERROR - Failed to close Kafka producer: {e}\n")
+    # Create strategy based on configuration
+    strategy = DelayedBestQualitySendStrategy(
+        delay_sec=KAFKA_SEND_DELAY_SEC,
+        quality_improvement_threshold=KAFKA_QUALITY_IMPROVEMENT_THRESHOLD
+    )
+    
+    # Create manager with TTL settings
+    detection_manager = DetectionManager(
+        sender=sender,
+        strategy=strategy,
+        enabled=True,
+        sent_record_ttl_sec=KAFKA_SENT_RECORD_TTL_SEC,
+        pending_ttl_sec=KAFKA_PENDING_TTL_SEC,
+        cleanup_interval_sec=KAFKA_CLEANUP_INTERVAL_SEC
+    )
+    
+    # Initialize (connect to Kafka)
+    detection_manager.initialize()
+
+
+def cleanup_detection_manager():
+    """Cleanup detection manager"""
+    global detection_manager
+    
+    if detection_manager is not None:
+        stats = detection_manager.get_stats()
+        sys.stdout.write(f"INFO - Detection stats: {stats}\n")
+        detection_manager.shutdown()
 
 
 def main():
+    global detection_manager
+    
     Gst.init(None)
     
-    init_kafka_producer()
+    init_detection_manager()
+    
+    # Start periodic check for pending detections
+    if KAFKA_ENABLED and detection_manager is not None:
+        GLib.timeout_add(500, detection_manager.process_pending_callback)
 
     loop = GLib.MainLoop()
     
@@ -551,6 +1004,10 @@ def main():
     sys.stdout.write(f"GPU_ID: {GPU_ID}\n")
     sys.stdout.write(f"PERF_MEASUREMENT_INTERVAL_SEC: {PERF_MEASUREMENT_INTERVAL_SEC}\n")
     sys.stdout.write(f"JETSON: {'TRUE' if JETSON else 'FALSE'}\n")
+    if KAFKA_ENABLED:
+        sys.stdout.write(f"KAFKA_BROKER: {KAFKA_BROKER}\n")
+        sys.stdout.write(f"KAFKA_TOPIC: {KAFKA_TOPIC}\n")
+        sys.stdout.write(f"KAFKA_SEND_DELAY_SEC: {KAFKA_SEND_DELAY_SEC}\n")
     sys.stdout.write("\n")
 
     nvstreammux.set_property("batch-size", STREAMMUX_BATCH_SIZE)
@@ -566,16 +1023,13 @@ def main():
     nvtracker.set_property("ll-config-file", "/opt/nvidia/deepstream/deepstream/samples/configs/deepstream-app/config_tracker_NvDCF_perf.yml")
     nvtracker.set_property("gpu-id", GPU_ID)
     nvtracker.set_property("display-tracking-id", 1)
-    nvosd.set_property("process-mode", 1)  # GPU process mode
+    nvosd.set_property("process-mode", 1)
     nvosd.set_property("qos", 0)
     nvsink.set_property("async", 0)
     nvsink.set_property("sync", 0)
     nvsink.set_property("qos", 0)
-
-    # set width and height for nvsink view
     nvsink.set_property("window-width", 400)
     nvsink.set_property("window-height", 300)
-
 
     if SOURCE.startswith("file://"):
         nvstreammux.set_property("live-source", 0)
@@ -621,7 +1075,7 @@ def main():
 
     pipeline.set_state(Gst.State.NULL)
     
-    cleanup_kafka_producer()
+    cleanup_detection_manager()
 
     sys.stdout.write("\n")
 
@@ -630,7 +1084,7 @@ def main():
 
 def parse_args():
     global SOURCE, INFER_CONFIG, STREAMMUX_BATCH_SIZE, STREAMMUX_WIDTH, STREAMMUX_HEIGHT, GPU_ID, JETSON
-    global KAFKA_BROKER, KAFKA_TOPIC, KAFKA_ENABLED
+    global KAFKA_BROKER, KAFKA_TOPIC, KAFKA_ENABLED, KAFKA_SEND_DELAY_SEC, KAFKA_QUALITY_IMPROVEMENT_THRESHOLD
 
     parser = argparse.ArgumentParser(description="DeepStream")
     parser.add_argument("-s", "--source", required=True, help="Source stream/file")
@@ -641,6 +1095,8 @@ def parse_args():
     parser.add_argument("-g", "--gpu-id", type=int, default=0, help="GPU id (default 0)")
     parser.add_argument("--kafka-broker", help="Kafka broker address (e.g., localhost:9092)")
     parser.add_argument("--kafka-topic", default="face-detections", help="Kafka topic name (default: face-detections)")
+    parser.add_argument("--kafka-delay", type=float, default=2.0, help="Delay in seconds before sending to Kafka (default: 2.0)")
+    parser.add_argument("--kafka-quality-threshold", type=float, default=0.1, help="Minimum quality improvement to resend (default: 0.1)")
     args = parser.parse_args()
 
     if args.source == "":
@@ -662,6 +1118,8 @@ def parse_args():
         KAFKA_BROKER = args.kafka_broker
         KAFKA_TOPIC = args.kafka_topic
         KAFKA_ENABLED = True
+        KAFKA_SEND_DELAY_SEC = args.kafka_delay
+        KAFKA_QUALITY_IMPROVEMENT_THRESHOLD = args.kafka_quality_threshold
 
     JETSON = is_aarch64()
 
