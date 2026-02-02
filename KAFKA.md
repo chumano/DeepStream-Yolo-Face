@@ -133,6 +133,8 @@ sudo apt-get install librdkafka-dev
 
 pkg-config --cflags rdkafka
 
+pkg-config --list-all | grep kafka
+
 # Build có Kafka support
 make CUDA_VER=12.6 KAFKA=1
 
