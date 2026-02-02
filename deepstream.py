@@ -844,7 +844,7 @@ def create_uridecodebin(stream_id, uri, nvstreammux):
     uridecodebin = Gst.ElementFactory.make("uridecodebin", bin_name)
 
     if "rtsp://" in uri:
-        pyds.configure_source_for_ntp_sync(uridecodebin)
+        pyds.configure_source_for_ntp_sync(hash(uridecodebin))
 
     uridecodebin.set_property("uri", uri)
 

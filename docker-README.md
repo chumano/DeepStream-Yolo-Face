@@ -27,6 +27,9 @@ python3 deepstream.py \
   --kafka-broker kafka:29092 \
   --kafka-topic face-detections
 
+python3 deepstream.py -s "rtsp://admin:dt%4012345@192.168.1.203:554/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif" -c config_infer_primary_yoloV8_face.txt --kafka-broker kafka:29092 --kafka-topic face-detections
+
+##################
 # or C app
 ./deepstream \
     -s file:///app/videos/friends_short.mp4 \
