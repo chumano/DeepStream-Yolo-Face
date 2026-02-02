@@ -8,7 +8,7 @@ import time
 import argparse
 import platform
 import json
-from threading import Lock
+from threading import Lock, RLock, Thread
 from ctypes import sizeof, c_float
 from collections import deque
 from kafka import KafkaProducer
@@ -34,6 +34,11 @@ KAFKA_BROKER = ""
 KAFKA_TOPIC = "face-detections"
 KAFKA_ENABLED = False
 
+# Detection buffering configuration
+MIN_DETECTIONS_BEFORE_SEND = 3  # Minimum number of detections before sending
+DETECTION_TIMEOUT_SEC = 1.0      # Timeout in seconds to wait for detections
+ENABLE_QUALITY_UPDATE = True     # Allow sending better quality detections for same object ID
+
 # Face quality thresholds
 MIN_LANDMARK_CONFIDENCE = 0.5  # Minimum confidence for a landmark to be valid
 MIN_VISIBLE_LANDMARKS = 3      # Minimum number of visible landmarks for a "good" face
@@ -44,6 +49,186 @@ MIN_FRONTAL_SCORE = 0.7        # Minimum frontal score (0-1) for frontal face
 perf_struct = {}
 kafka_producer = None
 seen_object_ids = deque(maxlen=100)
+
+# Detection buffering
+detection_buffer = {}  # {object_id: {'detections': [detection_data], 'first_seen': timestamp, 'best_sent': quality_score}}
+last_best_detections = {}  # {object_id: {'detection': detection_data, 'sent_at': timestamp}}
+buffer_lock = RLock()  # Use RLock for reentrant locking
+buffer_thread = None
+buffer_thread_running = False
+
+BUFFER_LOCK_TIMEOUT = 1.0  # Timeout for acquiring buffer lock (seconds)
+LAST_BEST_RETENTION_SEC = 60.0  # How long to keep last best detections (seconds)
+
+
+class BufferManager:
+    """Thread-safe buffer manager with timeout support"""
+    
+    @staticmethod
+    def acquire_lock(timeout=BUFFER_LOCK_TIMEOUT):
+        """Acquire buffer lock with timeout, returns True if acquired"""
+        return buffer_lock.acquire(timeout=timeout)
+    
+    @staticmethod
+    def release_lock():
+        """Release buffer lock"""
+        try:
+            buffer_lock.release()
+        except RuntimeError:
+            pass  # Lock not held
+    
+    @staticmethod
+    def add_detection(object_id, detection_data):
+        """Add detection to buffer with proper locking"""
+        if not BufferManager.acquire_lock():
+            sys.stderr.write(f"WARNING - Failed to acquire buffer lock for adding detection (ID: {object_id})\n")
+            return False
+        
+        try:
+            if object_id not in detection_buffer:
+                detection_buffer[object_id] = {
+                    'detections': [],
+                    'first_seen': time.time(),
+                    'best_sent': 0.0
+                }
+            
+            detection_buffer[object_id]['detections'].append(detection_data)
+            count = len(detection_buffer[object_id]['detections'])
+            return count
+        finally:
+            BufferManager.release_lock()
+    
+    @staticmethod
+    def get_pending_detections():
+        """Get detections ready to be sent, returns list of (object_id, best_detection, quality, should_remove)"""
+        if not BufferManager.acquire_lock():
+            return []
+        
+        try:
+            current_time = time.time()
+            pending = []
+            
+            for object_id, buffer_data in detection_buffer.items():
+                detections = buffer_data['detections']
+                first_seen = buffer_data['first_seen']
+                best_sent = buffer_data.get('best_sent', 0.0)
+                
+                if not detections:
+                    continue
+                
+                elapsed_time = current_time - first_seen
+                
+                # Check if we should send this detection
+                should_send = (
+                    len(detections) >= MIN_DETECTIONS_BEFORE_SEND or
+                    (elapsed_time >= DETECTION_TIMEOUT_SEC and len(detections) > 0)
+                )
+                
+                if should_send:
+                    best_detection = max(detections, key=lambda d: d['face_quality']['quality_score'])
+                    best_quality = best_detection['face_quality']['quality_score']
+                    
+                    # Check if worth sending
+                    if best_sent == 0.0 or (ENABLE_QUALITY_UPDATE and best_quality > best_sent):
+                        should_remove = elapsed_time >= DETECTION_TIMEOUT_SEC
+                        pending.append((object_id, best_detection, best_quality, should_remove))
+            
+            return pending
+        finally:
+            BufferManager.release_lock()
+    
+    @staticmethod
+    def update_after_send(object_id, quality, detection_data):
+        """Update buffer after successful send and store last best detection"""
+        if not BufferManager.acquire_lock():
+            return
+        
+        try:
+            current_time = time.time()
+            
+            # Update detection buffer
+            if object_id in detection_buffer:
+                detection_buffer[object_id]['best_sent'] = quality
+                detection_buffer[object_id]['detections'] = []
+                if object_id not in seen_object_ids:
+                    seen_object_ids.append(object_id)
+            
+            # Store/update last best detection
+            if object_id not in last_best_detections or \
+               last_best_detections[object_id]['detection']['face_quality']['quality_score'] < quality:
+                last_best_detections[object_id] = {
+                    'detection': detection_data,
+                    'sent_at': current_time,
+                    'quality': quality
+                }
+            
+            # Cleanup old entries periodically
+            BufferManager._cleanup_old_best_detections(current_time)
+        finally:
+            BufferManager.release_lock()
+    
+    @staticmethod
+    def get_last_best_detection(object_id):
+        """Get the last best detection for an object ID"""
+        if not BufferManager.acquire_lock():
+            return None
+        
+        try:
+            if object_id in last_best_detections:
+                return last_best_detections[object_id]['detection']
+            return None
+        finally:
+            BufferManager.release_lock()
+    
+    @staticmethod
+    def get_all_last_best_detections():
+        """Get all last best detections"""
+        if not BufferManager.acquire_lock():
+            return {}
+        
+        try:
+            return {
+                obj_id: data['detection'] 
+                for obj_id, data in last_best_detections.items()
+            }
+        finally:
+            BufferManager.release_lock()
+    
+    @staticmethod
+    def _cleanup_old_best_detections(current_time):
+        """Remove old entries from last_best_detections (must be called with lock held)"""
+        to_remove = [
+            obj_id for obj_id, data in last_best_detections.items()
+            if current_time - data['sent_at'] > LAST_BEST_RETENTION_SEC
+        ]
+        for obj_id in to_remove:
+            del last_best_detections[obj_id]
+    
+    @staticmethod
+    def remove_entries(object_ids):
+        """Remove entries from buffer"""
+        if not object_ids:
+            return
+        
+        if not BufferManager.acquire_lock():
+            return
+        
+        try:
+            for object_id in object_ids:
+                detection_buffer.pop(object_id, None)
+        finally:
+            BufferManager.release_lock()
+    
+    @staticmethod
+    def clear_last_best_detection(object_id):
+        """Clear the last best detection for a specific object ID"""
+        if not BufferManager.acquire_lock():
+            return
+        
+        try:
+            last_best_detections.pop(object_id, None)
+        finally:
+            BufferManager.release_lock()
 
 
 class GETFPS:
@@ -199,20 +384,61 @@ def assess_face_quality(landmarks):
     return is_good_face, quality_score, quality_metrics
 
 
+def send_to_kafka(detection_data):
+    """Actually send detection to Kafka"""
+    global kafka_producer
+    
+    if not KAFKA_ENABLED or kafka_producer is None:
+        return False
+    
+    try:
+        future = kafka_producer.send(KAFKA_TOPIC, value=detection_data)
+        record_metadata = future.get(timeout=1)
+        quality_score = detection_data['face_quality']['quality_score']
+        quality_status = "GOOD" if detection_data['face_quality']['is_good_face'] else "POOR"
+        sys.stdout.write(f"DEBUG - Sent {quality_status} face detection (ID: {detection_data['object_id']}, quality: {quality_score:.3f}, frame: {detection_data['frame_number']}, landmarks: {detection_data['face_quality']['visible_landmarks']}/{detection_data['face_quality']['total_landmarks']}) to Kafka {KAFKA_TOPIC}\n")
+        return True
+    except KafkaError as e:
+        sys.stderr.write(f"ERROR - Failed to send to Kafka: {e}\n")
+    except Exception as e:
+        sys.stderr.write(f"ERROR - Unexpected error sending to Kafka: {e}\n")
+    return False
+
+
+def process_detection_buffer():
+    """Background thread to process buffered detections"""
+    global buffer_thread_running
+    
+    while buffer_thread_running:
+        time.sleep(0.1)  # Check every 100ms
+        
+        # Get pending detections (lock is handled internally)
+        pending = BufferManager.get_pending_detections()
+        
+        to_remove = []
+        
+        # Send detections (outside of lock)
+        for object_id, detection, quality, should_remove in pending:
+            if send_to_kafka(detection):
+                BufferManager.update_after_send(object_id, quality, detection)
+            
+            if should_remove:
+                to_remove.append(object_id)
+        
+        # Remove timed-out entries
+        BufferManager.remove_entries(to_remove)
+
+
 def send_detection_to_kafka(frame_meta, obj_meta):
-    """Send detection information to Kafka for new object IDs"""
-    global kafka_producer, seen_object_ids
+    """Buffer detection information for potential sending to Kafka"""
+    global kafka_producer
     
     if not KAFKA_ENABLED or kafka_producer is None:
         return
     
     object_id = obj_meta.object_id
     
-    # Only send if this is a new object ID
-    if object_id in seen_object_ids:
-        return
-    
-    # Extract landmarks
+    # Extract landmarks (outside of lock)
     landmarks = []
     num_joints = int(obj_meta.mask_params.size / (sizeof(c_float) * 3))
     gain = min(obj_meta.mask_params.width / STREAMMUX_WIDTH, obj_meta.mask_params.height / STREAMMUX_HEIGHT)
@@ -231,19 +457,10 @@ def send_detection_to_kafka(frame_meta, obj_meta):
             "confidence": float(confidence)
         })
     
-    # Assess face quality
+    # Assess face quality (outside of lock)
     is_good_face, quality_score, quality_metrics = assess_face_quality(landmarks)
     
-    # Optionally, only send good faces to Kafka
-    # Uncomment the following lines to filter out low-quality faces:
-    # if not is_good_face:
-    #     sys.stdout.write(f"DEBUG - Skipping low-quality face (ID: {object_id}, quality: {quality_score:.3f})\n")
-    #     return
-    
-    # Mark as seen regardless of quality
-    seen_object_ids.append(object_id)
-    
-    # Prepare detection data
+    # Prepare detection data (outside of lock)
     detection_data = {
         "timestamp": time.time(),
         "object_id": object_id,
@@ -265,17 +482,11 @@ def send_detection_to_kafka(frame_meta, obj_meta):
         "source_id": frame_meta.source_id
     }
     
-    try:
-        # Send to Kafka and get future
-        future = kafka_producer.send(KAFKA_TOPIC, value=detection_data)
-        # Optionally wait for confirmation (with timeout)
-        record_metadata = future.get(timeout=1)
-        quality_status = "GOOD" if is_good_face else "POOR"
-        sys.stdout.write(f"DEBUG - Sent {quality_status} face detection (ID: {object_id}, quality: {quality_score:.3f}, frame: {frame_meta.frame_num}, landmarks: {quality_metrics['visible_landmarks']}/{quality_metrics['total_landmarks']}) to Kafka {KAFKA_TOPIC}\n")
-    except KafkaError as e:
-        sys.stderr.write(f"ERROR - Failed to send to Kafka: {e}\n")
-    except Exception as e:
-        sys.stderr.write(f"ERROR - Unexpected error sending to Kafka: {e}\n")
+    # Add to buffer using BufferManager (minimal lock time)
+    count = BufferManager.add_detection(object_id, detection_data)
+    
+    if count:
+        sys.stdout.write(f"DEBUG - Buffered detection (ID: {object_id}, quality: {quality_score:.3f}, count: {count}/{MIN_DETECTIONS_BEFORE_SEND})\n")
 
 
 def parse_face_from_meta(batch_meta, frame_meta, obj_meta):
@@ -442,7 +653,7 @@ def is_aarch64():
 
 def init_kafka_producer():
     """Initialize Kafka producer"""
-    global kafka_producer
+    global kafka_producer, buffer_thread, buffer_thread_running
     
     if not KAFKA_ENABLED:
         return
@@ -460,6 +671,13 @@ def init_kafka_producer():
         # Test connection by getting metadata
         kafka_producer.bootstrap_connected()
         sys.stdout.write(f"INFO - Kafka producer initialized (broker: {KAFKA_BROKER}, topic: {KAFKA_TOPIC})\n")
+        sys.stdout.write(f"INFO - Detection buffering enabled (min_detections: {MIN_DETECTIONS_BEFORE_SEND}, timeout: {DETECTION_TIMEOUT_SEC}s, quality_update: {ENABLE_QUALITY_UPDATE})\n")
+        
+        # Start buffer processing thread
+        buffer_thread_running = True
+        buffer_thread = Thread(target=process_detection_buffer, daemon=True)
+        buffer_thread.start()
+        sys.stdout.write("INFO - Detection buffer processing thread started\n")
     except Exception as e:
         sys.stderr.write(f"ERROR - Failed to initialize Kafka producer: {e}\n")
         kafka_producer = None
@@ -467,7 +685,13 @@ def init_kafka_producer():
 
 def cleanup_kafka_producer():
     """Cleanup Kafka producer"""
-    global kafka_producer
+    global kafka_producer, buffer_thread_running, buffer_thread
+    
+    # Stop buffer thread
+    buffer_thread_running = False
+    if buffer_thread is not None:
+        buffer_thread.join(timeout=2)
+        sys.stdout.write("INFO - Detection buffer processing thread stopped\n")
     
     if kafka_producer is not None:
         try:
@@ -631,6 +855,7 @@ def main():
 def parse_args():
     global SOURCE, INFER_CONFIG, STREAMMUX_BATCH_SIZE, STREAMMUX_WIDTH, STREAMMUX_HEIGHT, GPU_ID, JETSON
     global KAFKA_BROKER, KAFKA_TOPIC, KAFKA_ENABLED
+    global MIN_DETECTIONS_BEFORE_SEND, DETECTION_TIMEOUT_SEC, ENABLE_QUALITY_UPDATE
 
     parser = argparse.ArgumentParser(description="DeepStream")
     parser.add_argument("-s", "--source", required=True, help="Source stream/file")
@@ -641,6 +866,9 @@ def parse_args():
     parser.add_argument("-g", "--gpu-id", type=int, default=0, help="GPU id (default 0)")
     parser.add_argument("--kafka-broker", help="Kafka broker address (e.g., localhost:9092)")
     parser.add_argument("--kafka-topic", default="face-detections", help="Kafka topic name (default: face-detections)")
+    parser.add_argument("--min-detections", type=int, default=3, help="Minimum detections before sending to Kafka (default: 3)")
+    parser.add_argument("--detection-timeout", type=float, default=1.0, help="Timeout in seconds for buffering detections (default: 1.0)")
+    parser.add_argument("--disable-quality-update", action="store_true", help="Disable sending better quality detections for same object ID")
     args = parser.parse_args()
 
     if args.source == "":
@@ -662,6 +890,9 @@ def parse_args():
         KAFKA_BROKER = args.kafka_broker
         KAFKA_TOPIC = args.kafka_topic
         KAFKA_ENABLED = True
+        MIN_DETECTIONS_BEFORE_SEND = args.min_detections
+        DETECTION_TIMEOUT_SEC = args.detection_timeout
+        ENABLE_QUALITY_UPDATE = not args.disable_quality_update
 
     JETSON = is_aarch64()
 
