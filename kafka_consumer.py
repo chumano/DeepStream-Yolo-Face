@@ -9,6 +9,10 @@ from datetime import datetime
 import numpy as np
 import cv2
 import math
+import requests
+# pip install qdrant-client==1.16.2
+from qdrant_client import QdrantClient
+from qdrant_client.models import PointStruct, VectorParams, Distance
 
 # Configuration
 OUTPUT_DIR = "outputs/faces"  # Directory to save face images
@@ -24,6 +28,74 @@ LANDMARK_LABELS = {
     4: "Right Mouth Corner"
 }
 
+QDRANT_URL = "http://localhost:6333"
+QDRANT_COLLECTION = "faces"
+EMBED_URL = "http://localhost:5000/embed"
+
+# Initialize Qdrant client
+qdrant_client = QdrantClient(url=QDRANT_URL)
+
+def send_embedding_request(image_bytes):
+    files = {"image": ("face1.jpg", image_bytes, "image/jpeg")}
+    start = time.time()
+    response = requests.post(EMBED_URL, files=files)
+    elapsed = time.time() - start
+    # response format json: {"embedding": [...], "success": "success"}
+    return elapsed, response
+
+def save_embedding_to_qdrant(embedding, detection, aligned_filepath):
+    """
+    Save face embedding to Qdrant with metadata.
+    
+    Args:
+        embedding: List of floats representing the face embedding
+        detection: Detection data dict
+        aligned_filepath: Path to saved aligned face image
+    
+    Returns:
+        str: Point ID if successful, None otherwise
+    """
+    try:
+        object_id = detection.get('object_id', 0)
+        timestamp = detection.get('timestamp', time.time())
+        frame_num = detection.get('frame_number', 0)
+        quality_score = detection.get('face_quality', {}).get('quality_score', 0)
+        
+        # Create unique point ID
+        point_id = f"{object_id}_{int(timestamp * 1000)}_{frame_num}"
+        
+        # Prepare metadata
+        payload = {
+            "object_id": object_id,
+            "timestamp": timestamp,
+            "frame_number": frame_num,
+            "source_id": detection.get('source_id', ''),
+            "confidence": detection.get('confidence', 0),
+            "quality_score": quality_score,
+            "is_frontal": detection.get('face_quality', {}).get('is_frontal', False),
+            "bbox": detection.get('bbox', {}),
+            "aligned_image_path": aligned_filepath if aligned_filepath else "",
+            "datetime": datetime.fromtimestamp(timestamp).isoformat()
+        }
+        
+        # Create point
+        point = PointStruct(
+            id=hash(point_id) & 0x7FFFFFFFFFFFFFFF,  # Convert to positive int64
+            vector=embedding,
+            payload=payload
+        )
+        
+        # Upsert to Qdrant
+        qdrant_client.upsert(
+            collection_name=QDRANT_COLLECTION,
+            points=[point]
+        )
+        
+        return point_id
+    
+    except Exception as e:
+        print(f"ERROR - Failed to save embedding to Qdrant: {e}")
+        return None
 
 def draw_landmarks_on_image(image, landmarks, bbox=None, color=(0, 255, 0), radius=2, thickness=-1):
     """
@@ -201,10 +273,10 @@ def save_aligned_face_image(detection):
         detection: Detection data dict containing face_image (base64) and landmarks
 
     Returns:
-        str: Path to saved aligned image, or None if not saved
+        tuple: (filepath, aligned_image_bytes) or (None, None) if not saved
     """
     if not SAVE_IMAGES:
-        return None
+        return None, None
 
     face_image_base64 = detection.get('face_image')
     landmarks = detection.get('landmarks')
@@ -212,7 +284,7 @@ def save_aligned_face_image(detection):
     crop_bbox = detection.get('crop_bbox')  # Get crop bbox with padding
     
     if not face_image_base64 or not landmarks or len(landmarks) != 5 or not bbox:
-        return None
+        return None, None
 
     try:
         os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -220,7 +292,7 @@ def save_aligned_face_image(detection):
         reference_bbox = crop_bbox if crop_bbox is not None else bbox
         aligned = align_face(image_data, landmarks, reference_bbox, target_size=(112, 112))
         if aligned is None:
-            return None
+            return None, None
 
         timestamp = detection.get('timestamp', time.time())
         dt = datetime.fromtimestamp(timestamp)
@@ -231,6 +303,10 @@ def save_aligned_face_image(detection):
         filename = f"face_{object_id:03d}_{dt.strftime('%Y%m%d_%H%M%S')}_aligned_f{frame_num}_q{quality_score:.3f}.jpg"
         filepath = os.path.join(OUTPUT_DIR, filename)
         cv2.imwrite(filepath, aligned)
+        
+        # Encode aligned image as JPEG bytes for embedding
+        _, aligned_bytes = cv2.imencode('.jpg', aligned)
+        aligned_image_bytes = aligned_bytes.tobytes()
         
         # Save version with transformed landmarks drawn for testing
         # Transform landmarks to aligned image coordinates
@@ -269,11 +345,11 @@ def save_aligned_face_image(detection):
         landmarks_filepath = os.path.join(OUTPUT_DIR, landmarks_filename)
         cv2.imwrite(landmarks_filepath, aligned_with_landmarks)
         
-        return filepath
+        return filepath, aligned_image_bytes
 
     except Exception as e:
         print(f"ERROR - Failed to save aligned face image: {e}")
-        return None
+        return None, None
 
 
 # Create consumer
@@ -282,6 +358,22 @@ try:
     if SAVE_IMAGES and os.path.exists(OUTPUT_DIR):
         for f in os.listdir(OUTPUT_DIR):
             os.remove(os.path.join(OUTPUT_DIR, f))
+    
+    # Ensure Qdrant collection exists
+    try:
+        collections = qdrant_client.get_collections().collections
+        collection_names = [c.name for c in collections]
+        if QDRANT_COLLECTION not in collection_names:
+            # Create collection with appropriate vector size (typically 512 for face embeddings)
+            qdrant_client.create_collection(
+                collection_name=QDRANT_COLLECTION,
+                vectors_config=VectorParams(size=512, distance=Distance.COSINE)
+            )
+            print(f"Created Qdrant collection: {QDRANT_COLLECTION}")
+        else:
+            print(f"Using existing Qdrant collection: {QDRANT_COLLECTION}")
+    except Exception as e:
+        print(f"WARNING - Failed to setup Qdrant collection: {e}")
 
     consumer = KafkaConsumer(
         'face-detections',
@@ -307,6 +399,7 @@ try:
     last_stats_time = start_time
     stats_interval = 5  # Print stats every 5 seconds
     images_saved = 0  # Track saved images count
+    embeddings_saved = 0  # Track embeddings saved to Qdrant
     
     for message in consumer:
         message_count += 1
@@ -353,9 +446,33 @@ try:
             else:
                 print(f"\n⚠️ Face image present but failed to save")
             # Save aligned face image if possible
-            aligned_path = save_aligned_face_image(detection)
+            aligned_path, aligned_bytes = save_aligned_face_image(detection)
             if aligned_path:
                 print(f"🧑‍🎤 Aligned face image saved: {aligned_path}")
+                
+                # Generate embedding and save to Qdrant
+                if aligned_bytes:
+                    try:
+                        elapsed, response = send_embedding_request(aligned_bytes)
+                        if response.status_code == 200:
+                            result = response.json()
+                            if result.get('success') == True:
+                                embedding = result.get('embedding')
+                                if embedding:
+                                    point_id = save_embedding_to_qdrant(embedding, detection, aligned_path)
+                                    if point_id:
+                                        embeddings_saved += 1
+                                        print(f"💾 Embedding saved to Qdrant (ID: {point_id}, time: {elapsed:.3f}s)")
+                                    else:
+                                        print(f"❌ Failed to save embedding to Qdrant")
+                                else:
+                                    print(f"❌ No embedding in response")
+                            else:
+                                print(f"❌ Embedding request failed: {result}")
+                        else:
+                            print(f"❌ Embedding request failed with status {response.status_code}")
+                    except Exception as e:
+                        print(f"❌ Error generating/saving embedding: {e}")
             elif detection.get('landmarks') and len(detection['landmarks']) == 5:
                 print(f"⚠️ Failed to align face image")
         else:
@@ -372,6 +489,7 @@ try:
             print(f"STATISTICS:")
             print(f"  Total Messages: {message_count}")
             print(f"  Images Saved: {images_saved}")
+            print(f"  Embeddings Saved: {embeddings_saved}")
             print(f"  Total Time: {total_elapsed:.1f}s")
             print(f"  Average Rate: {avg_msg_per_sec:.2f} msg/s")
             print(f"{'='*50}")
@@ -386,6 +504,7 @@ except KeyboardInterrupt:
         print(f"\nFINAL STATISTICS:")
         print(f"  Total Messages: {message_count}")
         print(f"  Images Saved: {images_saved}")
+        print(f"  Embeddings Saved: {embeddings_saved}")
         print(f"  Total Time: {total_time:.1f}s")
         print(f"  Average Rate: {avg_rate:.2f} msg/s")
 except Exception as e:
