@@ -37,7 +37,7 @@ Pillow>=7.1.2 # image processing
 PyYAML>=5.3.1 # config file parsing
 requests>=2.23.0 # HTTP requests
 scipy>=1.4.1 # scientific computing
-torch>=1.7.0,<2.0.0 # tensor computing
+torch>=1.7.0,<=2.0.1 # tensor computing
 torchvision>=0.8.1,<0.16.0 # vision utils
 ```
  
