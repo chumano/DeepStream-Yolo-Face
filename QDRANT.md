@@ -1,3 +1,6 @@
+# 
+pip install qdrant-client==1.16.2
+
 
 ```bash
 curl -X POST http://localhost:6333/collections/faces/points/search \
