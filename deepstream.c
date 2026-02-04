@@ -784,7 +784,7 @@ set_custom_bbox(NvDsObjectMeta *obj_meta)
 }
 
 static void
-parse_face_from_meta(NvDsBatchMeta *batch_meta, NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta)
+process_face_from_meta(NvDsBatchMeta *batch_meta, NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta)
 {
   NvDsDisplayMeta *display_meta = NULL;
 
@@ -867,7 +867,8 @@ nvosd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_da
 {
   GstBuffer *buf = (GstBuffer *) info->data;
   NvDsBatchMeta *batch_meta = gst_buffer_get_nvds_batch_meta(buf);
-
+  
+  // each frame in batch
   NvDsMetaList *l_frame = NULL;
   for (l_frame = batch_meta->frame_meta_list; l_frame != NULL; l_frame = l_frame->next) {
     NvDsFrameMeta *frame_meta = (NvDsFrameMeta *) (l_frame->data);
@@ -876,7 +877,7 @@ nvosd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_da
     for (l_obj = frame_meta->obj_meta_list; l_obj != NULL; l_obj = l_obj->next) {
       NvDsObjectMeta *obj_meta = (NvDsObjectMeta *) (l_obj->data);
 
-      parse_face_from_meta(batch_meta, frame_meta, obj_meta);
+      process_face_from_meta(batch_meta, frame_meta, obj_meta);
       set_custom_bbox(obj_meta);
     }
   }

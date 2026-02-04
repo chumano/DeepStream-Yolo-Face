@@ -152,13 +152,26 @@ docker exec -it kafka bash
 
 ## Install librdkafka 
 ```bash
-sudo apt-get install librdkafka-dev
+apt-get install librdkafka-dev
 
 pkg-config --cflags rdkafka
 
 pkg-config --list-all | grep kafka
 
+
+# Install other libs
+# Install OpenCV
+apt-get update
+apt-get install libopencv-dev
+
+pkg-config --cflags opencv4
+
+# Install OpenSSL
+apt-get install libssl-dev
+
+
 # Build có Kafka support
 make CUDA_VER=12.6 KAFKA=1
+
 
 ```
