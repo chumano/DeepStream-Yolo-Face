@@ -38,6 +38,13 @@ python3 deepstream.py -s "rtsp://admin:dt%4012345@192.168.1.203:554/cam/realmoni
 ./deepstream \
     -s file:///app/videos/faces_tracking.mp4 \
     -c config_infer_primary_yoloV8_face.txt
+
+# send to kafka
+./deepstream \
+  -s file:///app/videos/faces_tracking.mp4 \
+    -c config_infer_primary_yoloV8_face.txt \
+    --kafka-broker kafka:29092 \
+    --kafka-topic face-detections
 ```
 
 ## VERSIONS

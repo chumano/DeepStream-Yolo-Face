@@ -740,7 +740,7 @@ send_detection_to_kafka(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta,
   g_string_append(json, "},");
   
   // Frame info
-  g_string_append_printf(json, "\"frame_number\": %lu,", frame_meta->frame_num);
+  g_string_append_printf(json, "\"frame_number\": %u,", frame_meta->frame_num);
   g_string_append_printf(json, "\"source_id\": %u", frame_meta->source_id);
   
   g_string_append(json, "}");

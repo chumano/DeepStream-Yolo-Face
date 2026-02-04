@@ -43,7 +43,7 @@ static gdouble KAFKA_CLEANUP_INTERVAL_SEC = 30.0;
 static gdouble MIN_LANDMARK_CONFIDENCE = 0.5;
 static guint MIN_VISIBLE_LANDMARKS = 3;
 static gdouble FACE_QUALITY_THRESHOLD = 0.6;
-static gdouble MAX_HEAD_ROTATION_ANGLE = 25.0;
+//static gdouble MAX_HEAD_ROTATION_ANGLE = 25.0;
 static gdouble MIN_FRONTAL_SCORE = 0.7;
 
 // =============================================================================

@@ -55,7 +55,6 @@ Run the consumer:
 ```bash
 python3 kafka_consumer.py
 ```
-
 ## Topic Management
 
 ### Create topic manually (optional - auto-created by default):
@@ -93,14 +92,38 @@ Each detection message contains:
   "object_id": 42,
   "class_id": 0,
   "confidence": 0.95,
+  "frame_size": { "width": 1920, "height": 1080 },
   "bbox": {
     "left": 100.5,
     "top": 200.3,
     "width": 150.2,
     "height": 180.7
   },
+  "crop_bbox": {
+    "left": 90,
+    "top": 180,
+    "width": 170,
+    "height": 220
+  },
+  "landmarks": [
+    { "x": 120.1, "y": 220.5, "confidence": 0.98 },
+    { "x": 160.2, "y": 225.7, "confidence": 0.97 },
+    { "x": 140.0, "y": 250.0, "confidence": 0.95 },
+    // ...more landmarks...
+  ],
+  "face_quality": {
+    "is_good_face": true,
+    "quality_score": 0.92,
+    "is_frontal": true,
+    "visible_landmarks": 5,
+    "total_landmarks": 5,
+    "avg_confidence": 0.96,
+    "frontal_score": 0.85,
+    "box_area_score": 0.8
+  },
   "frame_number": 1234,
-  "source_id": 0
+  "source_id": 0,
+  "face_image": "<base64-encoded-jpeg>"
 }
 ```
 
