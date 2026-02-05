@@ -28,6 +28,7 @@ static int MAX_DISPLAY_LEN = 128;
 // Utility Functions
 // =============================================================================
 
+// monotonic time
 static gdouble
 get_current_time(void)
 {
@@ -488,8 +489,8 @@ detection_manager_send_kafka(DetectionManager *manager, Detection *detection)
     return TRUE;
   }
   // print 
-  GST_INFO("INFO - Sending to Kafka: object_id=%lu, quality=%.3f\n",
-          detection->object_id, detection->quality_score);
+  GST_INFO("INFO - Sending to Kafka: object_id=%lu, quality=%.3f, timestamp=%.3f\n",
+          detection->object_id, detection->quality_score, detection->timestamp);
 
   // Send message to Kafka
   gint err = rd_kafka_produce(
@@ -1063,12 +1064,26 @@ send_detection_to_kafka(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta,
     face_image_base64 = encode_crop_to_base64_jpeg(surface, &crop_box, 85);
   }
 
+  gdouble current_time = get_current_time();
+  gdouble frame_timestamp = 0.0; // unit: seconds
+  if (frame_meta && frame_meta->ntp_timestamp) {
+    frame_timestamp = (gdouble)frame_meta->ntp_timestamp / 1e9; // ntp_timestamp is in nanoseconds
+  }
+  else{
+    GST_WARNING("Frame meta or ntp_timestamp is NULL, using current time\n");
+  }
+
+  GST_DEBUG("Detection object_id=%lu, quality_score=%.3f, good_face=%s, frame_ts=%.3f, current_ts=%.3f",
+           obj_meta->object_id, quality_score, is_good_face ? "true" : "false",
+            frame_timestamp, current_time);
+
+
   // Build JSON string
   GString *json = g_string_new("{");
 
   GST_DEBUG("Building JSON for object_id=%lu", obj_meta->object_id);
   // Timestamp
-  g_string_append_printf(json, "\"timestamp\": %.3f,", get_current_time());
+  g_string_append_printf(json, "\"timestamp\": %.3f,", frame_timestamp);
   
   // Object info
   g_string_append_printf(json, "\"object_id\": %lu,", obj_meta->object_id);
@@ -1123,8 +1138,10 @@ send_detection_to_kafka(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta,
   g_string_append(json, "}");
   
   // Queue detection
-  detection_manager_queue(detection_manager, obj_meta->object_id, quality_score, json->str);
-  
+  detection_manager_queue(detection_manager, obj_meta->object_id, 
+      quality_score, 
+      json->str);
+
   g_string_free(json, TRUE);
 }
 

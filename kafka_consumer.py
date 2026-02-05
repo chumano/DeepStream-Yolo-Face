@@ -445,7 +445,13 @@ class DetectionPrinter:
         logger.info("\n--- New Face Detection ---")
         logger.info(f"Partition: {partition}, Offset: {offset}")
         logger.info(f"Object ID: {detection['object_id']}")
-        logger.info(f"Timestamp: {detection['timestamp']}")
+        # Format timestamp to human-readable string with milliseconds
+        ts = detection['timestamp']
+        try:
+            ts_human = datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+        except Exception:
+            ts_human = str(ts)
+        logger.info(f"Timestamp: {ts} ({ts_human})")
         logger.info(f"Confidence: {detection['confidence']:.2f}")
         logger.info(f"Frame Size: {detection.get('frame_size', {})}")
         
