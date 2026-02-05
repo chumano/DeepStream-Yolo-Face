@@ -1557,8 +1557,10 @@ main(gint argc, char *argv[])
   g_object_set(G_OBJECT(capsfilter), "caps", caps, NULL);
   gst_caps_unref(caps);
 
-  g_object_set(G_OBJECT(nvstreammux), "batch-size", STREAMMUX_BATCH_SIZE, "batched-push-timeout", 25000,
-      "width", STREAMMUX_WIDTH, "height", STREAMMUX_HEIGHT, "live-source", 1, NULL);
+  g_object_set(G_OBJECT(nvstreammux),
+     "batch-size", STREAMMUX_BATCH_SIZE,
+     "batched-push-timeout", 25000, // in microseconds
+     "width", STREAMMUX_WIDTH, "height", STREAMMUX_HEIGHT, "live-source", 1, NULL);
   g_object_set(G_OBJECT(nvinfer), "config-file-path", INFER_CONFIG, "qos", 0, NULL);
   g_object_set(G_OBJECT(nvtracker), "tracker-width", 640, "tracker-height", 384,
       "ll-lib-file", "/opt/nvidia/deepstream/deepstream/lib/libnvds_nvmultiobjecttracker.so",

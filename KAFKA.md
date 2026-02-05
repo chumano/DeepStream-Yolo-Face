@@ -54,6 +54,9 @@ Create a file `kafka_consumer.py`:
 Run the consumer:
 ```bash
 python3 kafka_consumer.py
+
+
+SAVE_LANDMARKS=True python3 kafka_consumer.py
 ```
 ## Topic Management
 
