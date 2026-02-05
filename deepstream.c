@@ -3,6 +3,9 @@
 #include <setjmp.h>
 #include "nvbufsurftransform.h"
 
+GST_DEBUG_CATEGORY_STATIC(deepstream_debug_category);
+#define GST_CAT_DEFAULT deepstream_debug_category
+
 GOptionEntry entries[] = {
   {"source", 's', 0, G_OPTION_ARG_STRING, &SOURCE, "Source stream/file", NULL},
   {"infer-config", 'c', 0, G_OPTION_ARG_STRING, &INFER_CONFIG, "Config infer file", NULL},
@@ -726,47 +729,46 @@ static gchar *
 encode_crop_to_base64_jpeg(NvBufSurface *surface, CropBox *crop_box, gint quality)
 {
   if (!surface) {
-    g_printerr("ERROR - Surface is NULL\n");
+    GST_ERROR("Surface is NULL");
     return NULL;
   }
-  
+
   if (surface->numFilled < 1) {
-    g_printerr("ERROR - Surface has no filled buffers (numFilled=%d)\n", surface->numFilled);
+    GST_ERROR("Surface has no filled buffers (numFilled=%d)", surface->numFilled);
     return NULL;
   }
-  
+
   if (!surface->surfaceList) {
-    g_printerr("ERROR - Surface list is NULL\n");
+    GST_ERROR("Surface list is NULL");
     return NULL;
   }
-  
+
   NvBufSurfaceParams *surf_params = &surface->surfaceList[0];
-  
+
   // Additional validation
   if (!surf_params) {
-    g_printerr("ERROR - Surface params is NULL\n");
+    GST_ERROR("Surface params is NULL");
     return NULL;
   }
-  
+
   if (surf_params->width == 0 || surf_params->height == 0) {
-    g_printerr("ERROR - Surface has invalid dimensions: %dx%d\n", 
-               surf_params->width, surf_params->height);
+    GST_ERROR("Surface has invalid dimensions: %dx%d", surf_params->width, surf_params->height);
     return NULL;
   }
-  
-  g_print("DEBUG - Surface info: width=%d, height=%d, pitch=%d, colorFormat=%d, memType=%d\n",
+
+  GST_DEBUG("Surface info: width=%d, height=%d, pitch=%d, colorFormat=%d, memType=%d",
           surf_params->width, surf_params->height, surf_params->pitch,
           surface->surfaceList[0].colorFormat, surface->memType);
-  
+
   // Validate crop box
   if (crop_box->left >= surf_params->width || crop_box->top >= surf_params->height ||
       crop_box->width == 0 || crop_box->height == 0) {
-    g_printerr("ERROR - Invalid crop box: left=%u, top=%u, width=%u, height=%u (surface: %dx%d)\n",
+    GST_ERROR("Invalid crop box: left=%u, top=%u, width=%u, height=%u (surface: %dx%d)",
                crop_box->left, crop_box->top, crop_box->width, crop_box->height,
                surf_params->width, surf_params->height);
     return NULL;
   }
-  
+
   // Ensure crop doesn't exceed surface bounds
   if (crop_box->left + crop_box->width > surf_params->width) {
     crop_box->width = surf_params->width - crop_box->left;
@@ -774,9 +776,9 @@ encode_crop_to_base64_jpeg(NvBufSurface *surface, CropBox *crop_box, gint qualit
   if (crop_box->top + crop_box->height > surf_params->height) {
     crop_box->height = surf_params->height - crop_box->top;
   }
-  
+
   if (crop_box->width < 10 || crop_box->height < 10) {
-    g_printerr("ERROR - Crop box too small: %ux%u\n", crop_box->width, crop_box->height);
+    GST_ERROR("Crop box too small: %ux%u", crop_box->width, crop_box->height);
     return NULL;
   }
 
@@ -798,15 +800,15 @@ encode_crop_to_base64_jpeg(NvBufSurface *surface, CropBox *crop_box, gint qualit
   create_params.memType = NVBUF_MEM_CUDA_UNIFIED;
 #endif
   
-  g_print("DEBUG - Creating destination surface: %ux%u (RGBA, memType=%d)\n", 
+  GST_DEBUG("Creating destination surface: %ux%u (RGBA, memType=%d)", 
           crop_box->width, crop_box->height, create_params.memType);
   
   if (NvBufSurfaceCreate(&dst_surface, 1, &create_params) != 0) {
-    g_printerr("ERROR - Failed to create destination surface\n");
+    GST_ERROR("Failed to create destination surface");
     return NULL;
   }
   
-  g_print("DEBUG - Created dst_surface with memType=%d\n", dst_surface->memType);
+  GST_DEBUG("Created dst_surface with memType=%d", dst_surface->memType);
   
   // Setup transform parameters for cropping AND color conversion
   NvBufSurfTransformParams transform_params = {0};
@@ -836,30 +838,30 @@ encode_crop_to_base64_jpeg(NvBufSurface *surface, CropBox *crop_box, gint qualit
   config_params.gpu_id = surface->gpuId;
   config_params.cuda_stream = NULL;
   
-  g_print("DEBUG - Setting transform session params\n");
-  g_print("DEBUG - Source format: %d, Dest format: %d\n", 
+  GST_DEBUG("Setting transform session params");
+  GST_DEBUG("Source format: %d, Dest format: %d", 
           surface->surfaceList[0].colorFormat, 
           dst_surface->surfaceList[0].colorFormat);
   
   if (NvBufSurfTransformSetSessionParams(&config_params) != 0) {
-    g_printerr("ERROR - Failed to set transform session params\n");
+    GST_ERROR("Failed to set transform session params");
     NvBufSurfaceDestroy(dst_surface);
     return NULL;
   }
   
-  g_print("DEBUG - Performing surface transform (crop + color convert)\n");
+  GST_DEBUG("Performing surface transform (crop + color convert)");
   
   NvBufSurfTransform_Error transform_err = NvBufSurfTransform(surface, dst_surface, &transform_params);
   if (transform_err != NvBufSurfTransformError_Success) {
-    g_printerr("ERROR - Failed to transform surface, error=%d\n", transform_err);
+    GST_ERROR("Failed to transform surface, error=%d", transform_err);
     NvBufSurfaceDestroy(dst_surface);
     return NULL;
   }
-  
+
   // Synchronize CUDA operations to ensure transform is complete
   cudaError_t cuda_err = cudaStreamSynchronize(0);
   if (cuda_err != cudaSuccess) {
-    g_printerr("WARNING - cudaStreamSynchronize failed: %s\n", cudaGetErrorString(cuda_err));
+    GST_WARNING("cudaStreamSynchronize failed: %s", cudaGetErrorString(cuda_err));
   }
   
   NvBufSurfaceParams *dst_params = &dst_surface->surfaceList[0];
@@ -868,15 +870,15 @@ encode_crop_to_base64_jpeg(NvBufSurface *surface, CropBox *crop_box, gint qualit
   guint dst_pitch = dst_params->pitch;
   NvBufSurfaceColorFormat dst_color_format = dst_params->colorFormat;
   
-  g_print("DEBUG - dst_params: width=%u, height=%u, pitch=%u, colorFormat=%d, memType=%d\n",
+  GST_DEBUG("dst_params: width=%u, height=%u, pitch=%u, colorFormat=%d, memType=%d",
           crop_w, crop_h, dst_pitch, dst_color_format, dst_surface->memType);
-  g_print("DEBUG - dataPtr=%p\n", dst_params->dataPtr);
+  GST_DEBUG("dataPtr=%p", dst_params->dataPtr);
   
   // Allocate CPU buffer for the image data
   guint buffer_size = dst_pitch * crop_h;
   guchar *cpu_buffer = (guchar *)g_malloc(buffer_size);
   if (!cpu_buffer) {
-    g_printerr("ERROR - Failed to allocate CPU buffer (%u bytes)\n", buffer_size);
+    GST_ERROR("Failed to allocate CPU buffer (%u bytes)", buffer_size);
     NvBufSurfaceDestroy(dst_surface);
     return NULL;
   }
@@ -886,24 +888,24 @@ encode_crop_to_base64_jpeg(NvBufSurface *surface, CropBox *crop_box, gint qualit
   // For CUDA_UNIFIED memory, we can access it directly from CPU after sync
   // But we still need to copy it to our own buffer to be safe
   if (dst_surface->memType == NVBUF_MEM_CUDA_UNIFIED && dst_params->dataPtr) {
-    g_print("DEBUG - CUDA_UNIFIED memory, copying via cudaMemcpy\n");
+    GST_DEBUG("CUDA_UNIFIED memory, copying via cudaMemcpy");
     cuda_err = cudaMemcpy(cpu_buffer, dst_params->dataPtr, buffer_size, cudaMemcpyDeviceToHost);
     if (cuda_err == cudaSuccess) {
       data_copied = TRUE;
-      g_print("DEBUG - cudaMemcpy succeeded\n");
+      GST_DEBUG("cudaMemcpy succeeded");
     } else {
-      g_printerr("WARNING - cudaMemcpy failed: %s, trying direct access\n", cudaGetErrorString(cuda_err));
+      GST_WARNING("cudaMemcpy failed: %s, trying direct access", cudaGetErrorString(cuda_err));
       // For unified memory, direct access might work after sync
       cudaDeviceSynchronize();
       memcpy(cpu_buffer, dst_params->dataPtr, buffer_size);
       data_copied = TRUE;
-      g_print("DEBUG - Direct memcpy from unified memory succeeded\n");
+      GST_DEBUG("Direct memcpy from unified memory succeeded");
     }
   }
   
   if (!data_copied) {
     // Try mapping the surface
-    g_print("DEBUG - Attempting to map surface\n");
+    GST_DEBUG("Attempting to map surface");
     if (NvBufSurfaceMap(dst_surface, 0, 0, NVBUF_MAP_READ) == 0) {
       NvBufSurfaceSyncForCpu(dst_surface, 0, 0);
       
@@ -915,42 +917,42 @@ encode_crop_to_base64_jpeg(NvBufSurface *surface, CropBox *crop_box, gint qualit
       }
       
       if (mapped_data) {
-        g_print("DEBUG - Mapped data available at %p\n", mapped_data);
+        GST_DEBUG("Mapped data available at %p", mapped_data);
         memcpy(cpu_buffer, mapped_data, buffer_size);
         data_copied = TRUE;
       }
       
       NvBufSurfaceUnMap(dst_surface, 0, 0);
     } else {
-      g_print("DEBUG - Map failed\n");
+      GST_DEBUG("Map failed");
     }
   }
   
   if (!data_copied && dst_params->dataPtr) {
     // Last resort: try cudaMemcpy even if memType detection failed
-    g_print("DEBUG - Last resort: cudaMemcpy from %p\n", dst_params->dataPtr);
+    GST_DEBUG("Last resort: cudaMemcpy from %p", dst_params->dataPtr);
     cuda_err = cudaMemcpy(cpu_buffer, dst_params->dataPtr, buffer_size, cudaMemcpyDeviceToHost);
     if (cuda_err == cudaSuccess) {
       data_copied = TRUE;
-      g_print("DEBUG - cudaMemcpy succeeded\n");
+      GST_DEBUG("cudaMemcpy succeeded");
     } else {
-      g_printerr("ERROR - cudaMemcpy failed: %s\n", cudaGetErrorString(cuda_err));
+      GST_ERROR("cudaMemcpy failed: %s", cudaGetErrorString(cuda_err));
     }
   }
   
   if (!data_copied) {
-    g_printerr("ERROR - Failed to copy surface data to CPU\n");
+    GST_ERROR("Failed to copy surface data to CPU");
     g_free(cpu_buffer);
     NvBufSurfaceDestroy(dst_surface);
     return NULL;
   }
   
   // Debug: Print first 32 bytes of data
-  g_print("DEBUG - First 32 bytes of CPU data: ");
+  GST_DEBUG("First 32 bytes of CPU data:");
   for (int i = 0; i < 32 && i < (int)buffer_size; i++) {
-    g_print("%02x ", cpu_buffer[i]);
+    GST_DEBUG("%02x ", cpu_buffer[i]);
   }
-  g_print("\n");
+  GST_DEBUG("\n");
   
   NvBufSurfaceDestroy(dst_surface);
   
@@ -958,12 +960,12 @@ encode_crop_to_base64_jpeg(NvBufSurface *surface, CropBox *crop_box, gint qualit
   guint rgb_row_bytes = crop_w * 3;
   guchar *rgb_data = (guchar *)g_malloc(rgb_row_bytes * crop_h);
   if (!rgb_data) {
-    g_printerr("ERROR - Failed to allocate RGB buffer\n");
+    GST_ERROR("Failed to allocate RGB buffer");
     g_free(cpu_buffer);
     return NULL;
   }
   
-  g_print("DEBUG - Converting RGBA to RGB: %ux%u\n", crop_w, crop_h);
+  GST_DEBUG("Converting RGBA to RGB: %ux%u", crop_w, crop_h);
   
   // RGBA to RGB conversion
   for (guint y = 0; y < crop_h; y++) {
@@ -980,7 +982,7 @@ encode_crop_to_base64_jpeg(NvBufSurface *surface, CropBox *crop_box, gint qualit
   
   g_free(cpu_buffer);
   
-  g_print("DEBUG - Encoding to JPEG\n");
+  GST_DEBUG("Encoding to JPEG");
   
   // Encode to JPEG in memory
   struct jpeg_compress_struct cinfo;
@@ -1020,7 +1022,7 @@ encode_crop_to_base64_jpeg(NvBufSurface *surface, CropBox *crop_box, gint qualit
   
   free(jpeg_buffer); // libjpeg uses malloc
   
-  g_print("DEBUG - Successfully encoded image to base64 (size=%lu)\n", jpeg_size);
+  GST_DEBUG("Successfully encoded image to base64 (size=%lu)", jpeg_size);
   
   return base64_image;
 }
@@ -1038,23 +1040,23 @@ send_detection_to_kafka(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta,
   if (!detection_manager || !detection_manager->enabled) {
     return;
   }
-  
+
   // Calculate crop box
-  g_printf("INFO - Calculating crop box for object_id=%lu\n", obj_meta->object_id);
+  GST_INFO("Calculating crop box for object_id=%lu", obj_meta->object_id);
   CropBox crop_box;
   calculate_crop_box(obj_meta, &crop_box, STREAMMUX_WIDTH, STREAMMUX_HEIGHT);
-  
+
   // Encode cropped face to base64 JPEG (may be NULL if surface is unavailable)
   gchar *face_image_base64 = NULL;
   if (surface) {
-    g_printf("INFO - Encoding cropped face image for object_id=%lu\n", obj_meta->object_id);
+    GST_INFO("Encoding cropped face image for object_id=%lu", obj_meta->object_id);
     face_image_base64 = encode_crop_to_base64_jpeg(surface, &crop_box, 85);
   }
-  
+
   // Build JSON string
   GString *json = g_string_new("{");
-  
-  g_printf("INFO - Building JSON for object_id=%lu\n", obj_meta->object_id);
+
+  GST_INFO("Building JSON for object_id=%lu", obj_meta->object_id);
   // Timestamp
   g_string_append_printf(json, "\"timestamp\": %.3f,", get_current_time());
   
@@ -1209,12 +1211,12 @@ process_face_from_meta(NvDsBatchMeta *batch_meta, NvDsFrameMeta *frame_meta, NvD
     gboolean is_good_face = FALSE;
     gdouble quality_score = 0.0;
     FaceQualityMetrics metrics = {0};
-    
-    g_printf("INFO - Assessing face quality for object ID %lu with %u landmarks\n",
+
+    GST_INFO("Assessing face quality for object ID %lu with %u landmarks",
             obj_meta->object_id, num_joints);
     assess_face_quality(landmarks, num_joints, &is_good_face, &quality_score, &metrics);
-    
-    g_printf("INFO - Face quality for object ID %lu: is_good_face=%s, quality_score=%.3f\n",
+
+    GST_INFO("Face quality for object ID %lu: is_good_face=%s, quality_score=%.3f",
             obj_meta->object_id, is_good_face ? "true" : "false", quality_score);
     // Send detection to Kafka with surface
     send_detection_to_kafka(frame_meta, obj_meta, landmarks, num_joints,
@@ -1236,16 +1238,16 @@ nvosd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_da
 {
   GstBuffer *buf = (GstBuffer *) info->data;
   NvDsBatchMeta *batch_meta = gst_buffer_get_nvds_batch_meta(buf);
-  
+
   if (!batch_meta) {
-    g_printerr("ERROR - Failed to get batch meta\n");
+    GST_ERROR("Failed to get batch meta");
     return GST_PAD_PROBE_OK;
   }
-  
+
   // Get NvBufSurface from GstBuffer using the correct DeepStream method
   GstMapInfo map_info;
   if (!gst_buffer_map(buf, &map_info, GST_MAP_READ)) {
-    g_printerr("ERROR - Failed to map buffer\n");
+    GST_ERROR("Failed to map buffer");
     return GST_PAD_PROBE_OK;
   }
   
@@ -1257,10 +1259,10 @@ nvosd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_da
                             surface->surfaceList != NULL);
   
   if (surface_valid) {
-    g_print("DEBUG - Got valid surface: numFilled=%d, memType=%d\n", 
+    GST_DEBUG("Got valid surface: numFilled=%d, memType=%d", 
             surface->numFilled, surface->memType);
   } else {
-    g_print("WARNING - Invalid or NULL surface\n");
+    GST_WARNING("Invalid or NULL surface");
     surface = NULL;
   }
 
@@ -1318,11 +1320,11 @@ uridecodebin_pad_added_callback(GstElement *decodebin, GstPad *pad, gpointer use
   if (!strncmp(name, "video", 5)) {
     if (gst_caps_features_contains(features, "memory:NVMM")) {
       if (gst_pad_link(pad, nvstreammux_sink_pad) != GST_PAD_LINK_OK) {
-        g_printerr("ERROR - Failed to link source to nvstreammux sink pad\n");
+        GST_ERROR("Failed to link source to nvstreammux sink pad");
       }
     }
     else {
-      g_printerr("ERROR - decodebin did not pick NVIDIA decoder plugin\n");
+      GST_ERROR("decodebin did not pick NVIDIA decoder plugin");
     }
   }
 
@@ -1348,7 +1350,7 @@ create_uridecodebin(guint stream_id, const gchar *uri, GstElement *nvstreammux)
 
   GstPad *nvstreammux_sink_pad = gst_element_get_request_pad(nvstreammux, pad_name);
   if (!nvstreammux_sink_pad) {
-    g_printerr("ERROR - Failed to get nvstreammux %s pad\n", pad_name);
+    GST_ERROR("Failed to get nvstreammux %s pad", pad_name);
     return NULL;
   }
 
@@ -1368,7 +1370,7 @@ bus_call(GstBus *bus, GstMessage *message, gpointer user_data)
   switch (GST_MESSAGE_TYPE(message)) {
     case GST_MESSAGE_EOS:
     {
-      g_print("DEBUG - EOS\n");
+      GST_DEBUG("EOS");
       g_main_loop_quit(loop);
       break;
     }
@@ -1377,7 +1379,7 @@ bus_call(GstBus *bus, GstMessage *message, gpointer user_data)
       gchar *debug;
       GError *error;
       gst_message_parse_warning(message, &error, &debug);
-      g_printerr("WARNING - %s - %s\n", error->message, debug);
+      GST_WARNING("%s - %s", error->message, debug);
       g_free(debug);
       g_error_free(error);
       break;
@@ -1387,7 +1389,7 @@ bus_call(GstBus *bus, GstMessage *message, gpointer user_data)
       gchar *debug;
       GError *error;
       gst_message_parse_error(message, &error, &debug);
-      g_printerr("ERROR - %s - %s\n", error->message, debug);
+      GST_ERROR("%s - %s", error->message, debug);
       g_free(debug);
       g_error_free(error);
       g_main_loop_quit(loop);
@@ -1402,6 +1404,10 @@ bus_call(GstBus *bus, GstMessage *message, gpointer user_data)
 gint
 main(gint argc, char *argv[])
 {
+  // Initialize GStreamer and GST debug category before any GST_* logging
+  gst_init(&argc, &argv);
+  GST_DEBUG_CATEGORY_INIT(deepstream_debug_category, "deepstream", 0, "DeepStream Face App");
+
   GOptionContext *ctx = g_option_context_new("DeepStream");
   GOptionGroup *group = g_option_group_new("deepstream", NULL, NULL, NULL, NULL);
   GError *error = NULL;
@@ -1520,22 +1526,22 @@ main(gint argc, char *argv[])
     }
   }
 
-  g_print("\n");
-  g_print("SOURCE: %s\n", SOURCE);
-  g_print("INFER_CONFIG: %s\n", INFER_CONFIG);
-  g_print("STREAMMUX_BATCH_SIZE: %d\n", STREAMMUX_BATCH_SIZE);
-  g_print("STREAMMUX_WIDTH: %d\n", STREAMMUX_WIDTH);
-  g_print("STREAMMUX_HEIGHT: %d\n", STREAMMUX_HEIGHT);
-  g_print("GPU_ID: %d\n", GPU_ID);
-  g_print("PERF_MEASUREMENT_INTERVAL_SEC: %d\n", PERF_MEASUREMENT_INTERVAL_SEC);
-  g_print("JETSON: %s\n", JETSON ? "TRUE" : "FALSE");
+  GST_INFO("\n");
+  GST_INFO("SOURCE: %s", SOURCE);
+  GST_INFO("INFER_CONFIG: %s", INFER_CONFIG);
+  GST_INFO("STREAMMUX_BATCH_SIZE: %d", STREAMMUX_BATCH_SIZE);
+  GST_INFO("STREAMMUX_WIDTH: %d", STREAMMUX_WIDTH);
+  GST_INFO("STREAMMUX_HEIGHT: %d", STREAMMUX_HEIGHT);
+  GST_INFO("GPU_ID: %d", GPU_ID);
+  GST_INFO("PERF_MEASUREMENT_INTERVAL_SEC: %d", PERF_MEASUREMENT_INTERVAL_SEC);
+  GST_INFO("JETSON: %s", JETSON ? "TRUE" : "FALSE");
   if (KAFKA_ENABLED) {
-    g_print("KAFKA_BROKER: %s\n", KAFKA_BROKER);
-    g_print("KAFKA_TOPIC: %s\n", KAFKA_TOPIC);
-    g_print("KAFKA_SEND_DELAY_SEC: %.1f\n", KAFKA_SEND_DELAY_SEC);
-    g_print("KAFKA_QUALITY_IMPROVEMENT_THRESHOLD: %.2f\n", KAFKA_QUALITY_IMPROVEMENT_THRESHOLD);
+    GST_INFO("KAFKA_BROKER: %s", KAFKA_BROKER);
+    GST_INFO("KAFKA_TOPIC: %s", KAFKA_TOPIC);
+    GST_INFO("KAFKA_SEND_DELAY_SEC: %.1f", KAFKA_SEND_DELAY_SEC);
+    GST_INFO("KAFKA_QUALITY_IMPROVEMENT_THRESHOLD: %.2f", KAFKA_QUALITY_IMPROVEMENT_THRESHOLD);
   }
-  g_print("\n");
+  GST_INFO("\n");
 
   GstCaps *caps = gst_caps_from_string("video/x-raw(memory:NVMM), format=RGBA");
   g_object_set(G_OBJECT(capsfilter), "caps", caps, NULL);
@@ -1594,7 +1600,7 @@ main(gint argc, char *argv[])
     return -1;
   }
 
-  g_print("\n");
+  GST_INFO("\n");
 
   g_main_loop_run(loop);
 
@@ -1624,8 +1630,6 @@ main(gint argc, char *argv[])
   gst_object_unref(GST_OBJECT(pipeline));
   g_source_remove(bus_watch_id);
   g_main_loop_unref(loop);
-
-  g_print("\n");
 
   return 0;
 }

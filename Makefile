@@ -56,9 +56,9 @@ clean:
 	rm -rf $(OBJS) $(APP)
 
 run: $(APP)
-	GST_DEBUG=*:3 ./$(APP) -s file:///app/videos/faces_tracking.mp4  \
+	GST_DEBUG=deepstream:3 ./$(APP) -s file:///app/videos/faces_tracking.mp4  \
 	   	-c config_infer_primary_yoloV8_face.txt  \
-		--kafka-broker kafka:29092   --kafka-topic face-detection
+		--kafka-broker kafka:29092  --kafka-topic face-detections
 
 .PHONY: all clean help
 
