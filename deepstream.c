@@ -1039,113 +1039,190 @@ encode_crop_to_base64_jpeg(NvBufSurface *surface, CropBox *crop_box, gint qualit
 }
 
 // =============================================================================
-// Send Detection to Kafka
+// Landmark Processing Functions
+// =============================================================================
+
+static Landmark *
+extract_landmarks_from_object(NvDsObjectMeta *obj_meta, guint *num_landmarks_out)
+{
+  if (!obj_meta->mask_params.data || obj_meta->mask_params.size == 0) {
+    *num_landmarks_out = 0;
+    return NULL;
+  }
+
+  guint num_joints = obj_meta->mask_params.size / (sizeof(float) * 3);
+  if (num_joints == 0) {
+    *num_landmarks_out = 0;
+    return NULL;
+  }
+
+  gfloat gain = MIN((gfloat)obj_meta->mask_params.width / STREAMMUX_WIDTH,
+                    (gfloat)obj_meta->mask_params.height / STREAMMUX_HEIGHT);
+  gfloat pad_x = (obj_meta->mask_params.width - STREAMMUX_WIDTH * gain) * 0.5f;
+  gfloat pad_y = (obj_meta->mask_params.height - STREAMMUX_HEIGHT * gain) * 0.5f;
+
+  Landmark *landmarks = g_malloc(sizeof(Landmark) * num_joints);
+
+  for (guint i = 0; i < num_joints; i++) {
+    landmarks[i].x = (obj_meta->mask_params.data[i * 3 + 0] - pad_x) / gain;
+    landmarks[i].y = (obj_meta->mask_params.data[i * 3 + 1] - pad_y) / gain;
+    landmarks[i].confidence = obj_meta->mask_params.data[i * 3 + 2];
+  }
+
+  *num_landmarks_out = num_joints;
+  return landmarks;
+}
+
+// =============================================================================
+// JSON Building Functions
+// =============================================================================
+
+static gchar *
+build_detection_json(FaceContext *ctx, gdouble quality_score, 
+                     gboolean is_good_face, FaceQualityMetrics *metrics,
+                     const gchar *face_image_base64)
+{
+  CropBox crop_box;
+  calculate_crop_box(ctx->obj_meta, &crop_box, STREAMMUX_WIDTH, STREAMMUX_HEIGHT);
+
+  gdouble frame_timestamp = 0.0;
+  if (ctx->frame_meta && ctx->frame_meta->ntp_timestamp) {
+    frame_timestamp = (gdouble)ctx->frame_meta->ntp_timestamp / 1e9;
+  } else {
+    GST_WARNING("Frame meta or ntp_timestamp is NULL, using current time");
+    frame_timestamp = get_current_time();
+  }
+
+  GString *json = g_string_new("{");
+
+  // Core metadata
+  g_string_append_printf(json, "\"timestamp\":%.3f,", frame_timestamp);
+  g_string_append_printf(json, "\"object_id\":%lu,", ctx->obj_meta->object_id);
+  g_string_append_printf(json, "\"class_id\":%d,", ctx->obj_meta->class_id);
+  g_string_append_printf(json, "\"confidence\":%.4f,", ctx->obj_meta->confidence);
+
+  // Frame info
+  g_string_append_printf(json, "\"frame_size\":{\"width\":%d,\"height\":%d},",
+                         STREAMMUX_WIDTH, STREAMMUX_HEIGHT);
+  g_string_append_printf(json, "\"frame_number\":%u,", ctx->frame_meta->frame_num);
+  g_string_append_printf(json, "\"source_id\":%u,", ctx->frame_meta->source_id);
+
+  // Bounding boxes
+  g_string_append_printf(json, "\"bbox\":{\"left\":%.2f,\"top\":%.2f,\"width\":%.2f,\"height\":%.2f},",
+                         ctx->obj_meta->rect_params.left, ctx->obj_meta->rect_params.top,
+                         ctx->obj_meta->rect_params.width, ctx->obj_meta->rect_params.height);
+  g_string_append_printf(json, "\"crop_bbox\":{\"left\":%u,\"top\":%u,\"width\":%u,\"height\":%u},",
+                         crop_box.left, crop_box.top, crop_box.width, crop_box.height);
+
+  // Landmarks
+  g_string_append(json, "\"landmarks\":[");
+  for (guint i = 0; i < ctx->num_landmarks; i++) {
+    g_string_append_printf(json, "{\"x\":%.2f,\"y\":%.2f,\"confidence\":%.4f}%s",
+                           ctx->landmarks[i].x, ctx->landmarks[i].y, 
+                           ctx->landmarks[i].confidence,
+                           (i < ctx->num_landmarks - 1) ? "," : "");
+  }
+  g_string_append(json, "],");
+
+  // Face quality metrics
+  g_string_append(json, "\"face_quality\":{");
+  g_string_append_printf(json, "\"is_good_face\":%s,", is_good_face ? "true" : "false");
+  g_string_append_printf(json, "\"quality_score\":%.3f", quality_score);
+  if (metrics) {
+    g_string_append_printf(json, ",\"is_frontal\":%s", metrics->is_frontal ? "true" : "false");
+    g_string_append_printf(json, ",\"visible_landmarks\":%u", metrics->visible_landmarks);
+    g_string_append_printf(json, ",\"total_landmarks\":%u", metrics->total_landmarks);
+    g_string_append_printf(json, ",\"avg_confidence\":%.3f", metrics->avg_confidence);
+    g_string_append_printf(json, ",\"frontal_score\":%.3f", metrics->frontal_score);
+  }
+  g_string_append(json, "}");
+
+  // Face image (optional)
+  if (face_image_base64) {
+    g_string_append_printf(json, ",\"face_image\":\"%s\"", face_image_base64);
+  }
+
+  g_string_append(json, "}");
+
+  return g_string_free(json, FALSE);
+}
+
+// =============================================================================
+// Face Processing Pipeline
 // =============================================================================
 
 static void
-process_face_detection(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta, 
-                        Landmark *landmarks, guint num_landmarks,
-                        gboolean is_good_face, gdouble quality_score,
-                        FaceQualityMetrics *metrics, NvBufSurface *surface)
+process_face_detection(FaceContext *ctx)
 {
   if (!detection_manager || !detection_manager->enabled) {
     return;
   }
 
-  // TODO: reject low-quality faces early
+  // Assess face quality
+  gboolean is_good_face = FALSE;
+  gdouble quality_score = 0.0;
+  FaceQualityMetrics metrics = {0};
 
+  if (!assess_face_quality(ctx->landmarks, ctx->num_landmarks, 
+                           &is_good_face, &quality_score, &metrics)) {
+    GST_DEBUG("Failed to assess face quality for object_id=%lu", ctx->obj_meta->object_id);
+    return;
+  }
 
-  // Calculate crop box
-  GST_DEBUG("Calculating crop box for object_id=%lu", obj_meta->object_id);
-  CropBox crop_box;
-  calculate_crop_box(obj_meta, &crop_box, STREAMMUX_WIDTH, STREAMMUX_HEIGHT);
+  GST_DEBUG("Face quality for object_id=%lu: is_good=%s, score=%.3f",
+            ctx->obj_meta->object_id, is_good_face ? "true" : "false", quality_score);
 
-  // Encode cropped face to base64 JPEG (may be NULL if surface is unavailable)
+  // Encode cropped face image if enabled
   gchar *face_image_base64 = NULL;
-  if (ENABLE_CROP_IMAGE && surface) {
-    GST_DEBUG("Encoding cropped face image for object_id=%lu", obj_meta->object_id);
-    face_image_base64 = encode_crop_to_base64_jpeg(surface, &crop_box, 85);
+  if (ENABLE_CROP_IMAGE && ctx->surface) {
+    CropBox crop_box;
+    calculate_crop_box(ctx->obj_meta, &crop_box, STREAMMUX_WIDTH, STREAMMUX_HEIGHT);
+    face_image_base64 = encode_crop_to_base64_jpeg(ctx->surface, &crop_box, 85);
   }
 
-  gdouble current_time = get_current_time();
-  gdouble frame_timestamp = 0.0; // unit: seconds
-  if (frame_meta && frame_meta->ntp_timestamp) {
-    frame_timestamp = (gdouble)frame_meta->ntp_timestamp / 1e9; // ntp_timestamp is in nanoseconds
-  }
-  else{
-    GST_WARNING("Frame meta or ntp_timestamp is NULL, using current time\n");
+  // Build JSON payload
+  gchar *json_data = build_detection_json(ctx, quality_score, is_good_face, 
+                                          &metrics, face_image_base64);
+
+  // Queue detection for Kafka
+  detection_manager_queue(detection_manager, ctx->obj_meta->object_id,
+                          quality_score, json_data);
+
+  // Cleanup
+  g_free(json_data);
+  g_free(face_image_base64);
+}
+
+static void
+process_object(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta, NvBufSurface *surface)
+{
+  // Extract landmarks from object metadata
+  guint num_landmarks = 0;
+  Landmark *landmarks = extract_landmarks_from_object(obj_meta, &num_landmarks);
+
+  if (!landmarks || num_landmarks < 5) {
+    GST_DEBUG("Insufficient landmarks (%u) for object_id=%lu", 
+              num_landmarks, obj_meta->object_id);
+    g_free(landmarks);
+    return;
   }
 
-  GST_DEBUG("Detection object_id=%lu, quality_score=%.3f, good_face=%s, frame_ts=%.3f, current_ts=%.3f",
-           obj_meta->object_id, quality_score, is_good_face ? "true" : "false",
-            frame_timestamp, current_time);
+  // Create face context
+  FaceContext ctx = {
+    .frame_meta = frame_meta,
+    .obj_meta = obj_meta,
+    .surface = surface,
+    .landmarks = landmarks,
+    .num_landmarks = num_landmarks
+  };
 
-
-  // Build JSON string
-  GString *json = g_string_new("{");
-
-  GST_DEBUG("Building JSON for object_id=%lu", obj_meta->object_id);
-  // Timestamp
-  g_string_append_printf(json, "\"timestamp\": %.3f,", frame_timestamp);
-  
-  // Object info
-  g_string_append_printf(json, "\"object_id\": %lu,", obj_meta->object_id);
-  g_string_append_printf(json, "\"class_id\": %d,", obj_meta->class_id);
-  g_string_append_printf(json, "\"confidence\": %.4f,", obj_meta->confidence);
-  
-  // Frame size
-  g_string_append_printf(json, "\"frame_size\": {\"width\": %d, \"height\": %d},",
-                         STREAMMUX_WIDTH, STREAMMUX_HEIGHT);
-  
-  // Bounding box
-  g_string_append_printf(json, "\"bbox\": {\"left\": %.2f, \"top\": %.2f, \"width\": %.2f, \"height\": %.2f},",
-                         obj_meta->rect_params.left, obj_meta->rect_params.top,
-                         obj_meta->rect_params.width, obj_meta->rect_params.height);
-  
-  // Crop box
-  g_string_append_printf(json, "\"crop_bbox\": {\"left\": %u, \"top\": %u, \"width\": %u, \"height\": %u},",
-                         crop_box.left, crop_box.top, crop_box.width, crop_box.height);
-  
-  // Landmarks
-  g_string_append(json, "\"landmarks\": [");
-  for (guint i = 0; i < num_landmarks; i++) {
-    g_string_append_printf(json, "{\"x\": %.2f, \"y\": %.2f, \"confidence\": %.4f}%s",
-                           landmarks[i].x, landmarks[i].y, landmarks[i].confidence,
-                           (i < num_landmarks - 1) ? "," : "");
+  // Process face detection and send to Kafka
+  if (KAFKA_ENABLED) {
+    process_face_detection(&ctx);
   }
-  g_string_append(json, "],");
-  
-  // Face quality
-  g_string_append_printf(json, "\"face_quality\": {");
-  g_string_append_printf(json, "\"is_good_face\": %s,", is_good_face ? "true" : "false");
-  g_string_append_printf(json, "\"quality_score\": %.3f,", quality_score);
-  if (metrics) {
-    g_string_append_printf(json, "\"is_frontal\": %s,", metrics->is_frontal ? "true" : "false");
-    g_string_append_printf(json, "\"visible_landmarks\": %u,", metrics->visible_landmarks);
-    g_string_append_printf(json, "\"total_landmarks\": %u,", metrics->total_landmarks);
-    g_string_append_printf(json, "\"avg_confidence\": %.3f,", metrics->avg_confidence);
-    g_string_append_printf(json, "\"frontal_score\": %.3f", metrics->frontal_score);
-  }
-  g_string_append(json, "},");
-  
-  // Frame info
-  g_string_append_printf(json, "\"frame_number\": %u,", frame_meta->frame_num);
-  g_string_append_printf(json, "\"source_id\": %u", frame_meta->source_id);
-  
-  // Face image (base64 encoded JPEG)
-  if (ENABLE_CROP_IMAGE && face_image_base64) {
-    g_string_append_printf(json, ",\"face_image\": \"%s\"", face_image_base64);
-    g_free(face_image_base64);
-  }
-  
-  g_string_append(json, "}");
-  
-  // Queue detection
-  detection_manager_queue(detection_manager, obj_meta->object_id, 
-      quality_score, 
-      json->str);
 
-  g_string_free(json, TRUE);
+  // Cleanup
+  g_free(landmarks);
 }
 
 static void
@@ -1178,61 +1255,6 @@ set_custom_bbox(NvDsObjectMeta *obj_meta)
   obj_meta->text_params.text_bg_clr.green = 0.0;
   obj_meta->text_params.text_bg_clr.blue = 1.0;
   obj_meta->text_params.text_bg_clr.alpha = 1.0;
-}
-
-static void
-process_a_frame(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta, NvBufSurface *surface)
-{
-  guint num_joints = obj_meta->mask_params.size / (sizeof(float) * 3);
-
-  gfloat gain = MIN((gfloat) obj_meta->mask_params.width / STREAMMUX_WIDTH, (gfloat) obj_meta->mask_params.height /
-      STREAMMUX_HEIGHT);
-
-  gfloat pad_x = (obj_meta->mask_params.width - STREAMMUX_WIDTH * gain) * 0.5f;
-  gfloat pad_y = (obj_meta->mask_params.height - STREAMMUX_HEIGHT * gain) * 0.5f;
-
-  // Extract landmarks for quality assessment
-  Landmark *landmarks = NULL;
-  if (num_joints > 0) {
-    landmarks = g_malloc(sizeof(Landmark) * num_joints);
-  }
-
-  for (guint i = 0; i < num_joints; ++i) {
-    gfloat xc = (obj_meta->mask_params.data[i * 3 + 0] - pad_x) / gain;
-    gfloat yc = (obj_meta->mask_params.data[i * 3 + 1] - pad_y) / gain;
-    gfloat confidence = obj_meta->mask_params.data[i * 3 + 2];
-
-    // Store landmark for quality assessment
-    if (landmarks) {
-      landmarks[i].x = xc;
-      landmarks[i].y = yc;
-      landmarks[i].confidence = confidence;
-    }
-  }
-
-  // TODO: save frame jpg to disk
-
-  // Assess face quality and send to Kafka if enabled
-  if (KAFKA_ENABLED && landmarks && num_joints >= 5) {
-    gboolean is_good_face = FALSE;
-    gdouble quality_score = 0.0;
-    FaceQualityMetrics metrics = {0};
-
-    GST_DEBUG("Assessing face quality for object ID %lu with %u landmarks",
-            obj_meta->object_id, num_joints);
-    assess_face_quality(landmarks, num_joints, &is_good_face, &quality_score, &metrics);
-
-    GST_DEBUG("Face quality for object ID %lu: is_good_face=%s, quality_score=%.3f",
-            obj_meta->object_id, is_good_face ? "true" : "false", quality_score);
-    // Send detection to Kafka with surface
-    process_face_detection(frame_meta, obj_meta, landmarks, num_joints,
-                            is_good_face, quality_score, &metrics, surface);
-  }
-
-  if (landmarks) {
-    g_free(landmarks);
-  }
-
 }
 
 static GstPadProbeReturn
@@ -1507,13 +1529,15 @@ appsink_new_sample_callback(GstElement *appsink, gpointer user_data)
     // get source id
     // guint source_id = frame_meta->source_id;
     // GST_INFO("Processing frame number %u from source ID %u", frame_meta->frame_num, source_id);
+    //TODO: save frame jpg image to disk
+    
     // Process each object in frame
     NvDsMetaList *l_obj = NULL;
     for (l_obj = frame_meta->obj_meta_list; l_obj != NULL; l_obj = l_obj->next) {
       NvDsObjectMeta *obj_meta = (NvDsObjectMeta *)(l_obj->data);
       
       // Process face with surface parameter
-      process_a_frame(frame_meta, obj_meta, surface);
+      process_object(frame_meta, obj_meta, surface);
     }
   }
   

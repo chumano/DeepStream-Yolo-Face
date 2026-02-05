@@ -71,6 +71,14 @@ typedef struct _Landmark {
   gdouble confidence;
 } Landmark;
 
+typedef struct _FaceContext {
+  NvDsFrameMeta *frame_meta;
+  NvDsObjectMeta *obj_meta;
+  NvBufSurface *surface;
+  Landmark *landmarks;
+  guint num_landmarks;
+} FaceContext;
+
 typedef struct _Detection {
   guint64 object_id;
   gdouble quality_score;
