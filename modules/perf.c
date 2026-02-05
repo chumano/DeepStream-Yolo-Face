@@ -18,7 +18,7 @@ perf_cb(gpointer context, NvDsAppPerfStruct *str)
     fps_avg[i] = str->fps_avg[i];
   }
   for (i = 0; i < numf; ++i) {
-    g_print("DEBUG - FPS of stream %d: %.2f (%.2f)\n", i + 1, fps[i], fps_avg[i]);
+    g_print("DEBUG - FPS of stream %d: %.2f (avg: %.2f)\n", i + 1, fps[i], fps_avg[i]);
   }
   g_mutex_unlock(&fps_lock);
 }

@@ -49,6 +49,9 @@ static gdouble MIN_FRONTAL_SCORE = 0.7;
 // Crop image support
 static gboolean ENABLE_CROP_IMAGE = TRUE;
 
+// Display settings
+static gboolean DISABLE_DISPLAY = FALSE;
+
 // =============================================================================
 // Detection Manager Structures
 // =============================================================================

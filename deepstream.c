@@ -18,6 +18,7 @@ GOptionEntry entries[] = {
   {"kafka-delay", 'd', 0, G_OPTION_ARG_DOUBLE, &KAFKA_SEND_DELAY_SEC, "Delay in seconds before sending to Kafka (default: 2.0)", NULL},
   {"kafka-quality-threshold", 'q', 0, G_OPTION_ARG_DOUBLE, &KAFKA_QUALITY_IMPROVEMENT_THRESHOLD, "Minimum quality improvement to resend (default: 0.005)", NULL},
   {"disable-crop-image", 0, G_OPTION_FLAG_REVERSE, G_OPTION_ARG_NONE, &ENABLE_CROP_IMAGE, "Disable crop image in Kafka JSON", NULL},
+  {"disable-display", 0, 0, G_OPTION_ARG_NONE, &DISABLE_DISPLAY, "Disable video display output", NULL},
   {NULL}
 };
 
@@ -1284,8 +1285,6 @@ nvosd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_da
     for (l_obj = frame_meta->obj_meta_list; l_obj != NULL; l_obj = l_obj->next) {
       NvDsObjectMeta *obj_meta = (NvDsObjectMeta *) (l_obj->data);
 
-      // Process face with surface parameter
-      process_face_from_meta(batch_meta, frame_meta, obj_meta, surface);
       set_custom_bbox(obj_meta);
     }
   }
@@ -1410,6 +1409,81 @@ bus_call(GstBus *bus, GstMessage *message, gpointer user_data)
   return TRUE;
 }
 
+
+static GstFlowReturn
+appsink_new_sample_callback(GstElement *appsink, gpointer user_data)
+{
+  GstSample *sample = NULL;
+  
+  // Pull sample from appsink
+  g_signal_emit_by_name(appsink, "pull-sample", &sample);
+  
+  if (!sample) {
+    GST_ERROR("Failed to pull sample from appsink");
+    return GST_FLOW_ERROR;
+  }
+  
+  // Get buffer from sample
+  GstBuffer *buf = gst_sample_get_buffer(sample);
+  if (!buf) {
+    GST_ERROR("Failed to get buffer from sample");
+    gst_sample_unref(sample);
+    return GST_FLOW_ERROR;
+  }
+  
+  // Get batch metadata
+  NvDsBatchMeta *batch_meta = gst_buffer_get_nvds_batch_meta(buf);
+  if (!batch_meta) {
+    GST_ERROR("Failed to get batch meta");
+    gst_sample_unref(sample);
+    return GST_FLOW_OK;
+  }
+  
+  // Map buffer to get surface
+  GstMapInfo map_info;
+  if (!gst_buffer_map(buf, &map_info, GST_MAP_READ)) {
+    GST_ERROR("Failed to map buffer");
+    gst_sample_unref(sample);
+    return GST_FLOW_ERROR;
+  }
+  
+  NvBufSurface *surface = (NvBufSurface *)map_info.data;
+  
+  // Validate surface
+  gboolean surface_valid = (surface != NULL && 
+                            surface->numFilled > 0 && 
+                            surface->surfaceList != NULL);
+  
+  if (!surface_valid) {
+    GST_WARNING("Invalid surface");
+    surface = NULL;
+  }
+  
+  // Process each frame in batch
+  NvDsMetaList *l_frame = NULL;
+  for (l_frame = batch_meta->frame_meta_list; l_frame != NULL; l_frame = l_frame->next) {
+    NvDsFrameMeta *frame_meta = (NvDsFrameMeta *)(l_frame->data);
+    
+    // get source id
+    // guint source_id = frame_meta->source_id;
+    // GST_INFO("Processing frame number %u from source ID %u", frame_meta->frame_num, source_id);
+    // Process each object in frame
+    NvDsMetaList *l_obj = NULL;
+    for (l_obj = frame_meta->obj_meta_list; l_obj != NULL; l_obj = l_obj->next) {
+      NvDsObjectMeta *obj_meta = (NvDsObjectMeta *)(l_obj->data);
+      
+      // Process face with surface parameter
+      process_face_from_meta(batch_meta, frame_meta, obj_meta, surface);
+    }
+  }
+  
+  // Cleanup
+  gst_buffer_unmap(buf, &map_info);
+  gst_sample_unref(sample);
+  
+  return GST_FLOW_OK;
+}
+
 gint
 main(gint argc, char *argv[])
 {
@@ -1513,28 +1587,98 @@ main(gint argc, char *argv[])
     return -1;
   }
 
-  GstElement *nvosd = gst_element_factory_make("nvdsosd", "nvdsosd");
-  if (!nvosd || !gst_bin_add(GST_BIN(pipeline), nvosd)) {
-    g_printerr("ERROR - Failed to create nvdsosd\n");
+
+  //================================================
+  GstElement *tee = gst_element_factory_make("tee", "tee");
+  if (!tee || !gst_bin_add(GST_BIN(pipeline), tee)) {
+    g_printerr("ERROR - Failed to create tee\n");
     return -1;
   }
 
+
+  //================================================
+  // Tạo display sink có điều kiện
+  GstElement *queue_display = NULL;
+  GstElement *nvosd  = NULL;
   GstElement *nvsink = NULL;
-  if (JETSON) {
-    nvsink = gst_element_factory_make("nv3dsink", "nv3dsink");
-    if (!nvsink || !gst_bin_add(GST_BIN(pipeline), nvsink)) {
-      g_printerr("ERROR - Failed to create nv3dsink\n");
+  if (!DISABLE_DISPLAY) {
+    // queue
+    queue_display = gst_element_factory_make("queue", "queue_display");
+    if (!queue_display || !gst_bin_add(GST_BIN(pipeline), queue_display)) {
+      g_printerr("ERROR - Failed to create queue_display\n");
       return -1;
     }
-  }
-  else {
-    nvsink = gst_element_factory_make("nveglglessink", "nveglglessink");
-    if (!nvsink || !gst_bin_add(GST_BIN(pipeline), nvsink)) {
-      g_printerr("ERROR - Failed to create nveglglessink\n");
+    
+    g_object_set(G_OBJECT(queue_display),
+        "max-size-buffers", 5,
+        "leaky", 2,
+        NULL);
+
+    // osd    
+    nvosd = gst_element_factory_make("nvdsosd", "nvdsosd");
+    if (!nvosd || !gst_bin_add(GST_BIN(pipeline), nvosd)) {
+      g_printerr("ERROR - Failed to create nvdsosd\n");
       return -1;
     }
+    
+    g_object_set(G_OBJECT(nvosd), "process-mode", MODE_GPU, "qos", 0, NULL);
+    
+    if (!JETSON) {
+      g_object_set(G_OBJECT(nvosd), "gpu_id", GPU_ID, NULL);
+    }
+
+
+
+    // display sink
+    if (JETSON) {
+      nvsink = gst_element_factory_make("nv3dsink", "nv3dsink");
+      if (!nvsink || !gst_bin_add(GST_BIN(pipeline), nvsink)) {
+        g_printerr("ERROR - Failed to create nv3dsink\n");
+        return -1;
+      }
+    }
+    else {
+      nvsink = gst_element_factory_make("nveglglessink", "nveglglessink");
+      if (!nvsink || !gst_bin_add(GST_BIN(pipeline), nvsink)) {
+        g_printerr("ERROR - Failed to create nveglglessink\n");
+        return -1;
+      }
+    }
+    
+    // Configure display sink
+    g_object_set(G_OBJECT(nvsink), "async", 0, "sync", 0, "qos", 0, NULL);
+    g_object_set(G_OBJECT(nvsink), "window-width", 400, "window-height", 400, NULL);
   }
 
+  //================================================
+  GstElement *queue_app = gst_element_factory_make("queue", "queue_app");
+  if (!queue_app || !gst_bin_add(GST_BIN(pipeline), queue_app)) {
+    g_printerr("ERROR - Failed to create queue_app\n");
+    return -1;
+  }
+
+  g_object_set(G_OBJECT(queue_app),
+    "max-size-buffers", 5,
+    "leaky", 2,
+    NULL);
+
+  GstElement *appsink = gst_element_factory_make("appsink", "appsink");
+  if (!appsink || !gst_bin_add(GST_BIN(pipeline), appsink)) {
+    g_printerr("ERROR - Failed to create appsink\n");
+    return -1;
+  }
+
+  // Configure appsink
+  g_object_set(G_OBJECT(appsink),
+    "emit-signals", TRUE,      // appsink sẽ phát ra một tín hiệu mỗi khi có buffer mới đến. Bạn có thể kết nối hàm xử lý của mình với tín hiệu này bằng g_signal_connect.
+    "sync", FALSE,             // Don't sync to clock
+    "max-buffers", 5,          // Keep only 5 buffers to avoid memory buildup
+    "drop", TRUE,              // Drop old buffers if queue is full
+    NULL);
+  // Connect callback to appsink
+  g_signal_connect(appsink, "new-sample", G_CALLBACK(appsink_new_sample_callback), NULL);
+
+  //================================================
   GST_DEBUG("\n");
   GST_DEBUG("SOURCE: %s", SOURCE);
   GST_DEBUG("INFER_CONFIG: %s", INFER_CONFIG);
@@ -1566,11 +1710,6 @@ main(gint argc, char *argv[])
       "ll-lib-file", "/opt/nvidia/deepstream/deepstream/lib/libnvds_nvmultiobjecttracker.so",
       "ll-config-file", "/opt/nvidia/deepstream/deepstream/samples/configs/deepstream-app/config_tracker_NvDCF_perf.yml",
       "gpu-id", GPU_ID, "display-tracking-id", 1, NULL);
-  g_object_set(G_OBJECT(nvosd), "process-mode", MODE_GPU, "qos", 0, NULL);
-  g_object_set(G_OBJECT(nvsink), "async", 0, "sync", 0, "qos", 0, NULL);
-
-  // set nvsink window-width and height
-  g_object_set(G_OBJECT(nvsink), "window-width", 400, "window-height", 400, NULL);
 
   if (g_strrstr(SOURCE, "file://")) {
     g_object_set(G_OBJECT(nvstreammux), "live-source", 0, NULL);
@@ -1580,31 +1719,77 @@ main(gint argc, char *argv[])
     g_object_set(G_OBJECT(nvstreammux), "nvbuf-memory-type", NVBUF_MEM_CUDA_DEVICE, "gpu_id", GPU_ID, NULL);
     g_object_set(G_OBJECT(nvinfer), "gpu_id", GPU_ID, NULL);
     g_object_set(G_OBJECT(nvvidconv), "nvbuf-memory-type", NVBUF_MEM_CUDA_DEVICE, "gpu_id", GPU_ID, NULL);
-    g_object_set(G_OBJECT(nvosd), "gpu_id", GPU_ID, NULL);
   }
 
-  if (!gst_element_link_many(nvstreammux, nvinfer, nvtracker, nvvidconv, capsfilter, nvosd, nvsink, NULL)) {
-    g_printerr("ERROR - Failed to link pipeline elements\n");
+  //==============================================
+  // Link the elements together
+  if (!gst_element_link_many(nvstreammux, nvinfer, nvtracker, nvvidconv, 
+                           capsfilter, tee, NULL)) {
+    g_printerr("ERROR - Failed to link pipeline elements to tee\n");
     return -1;
   }
+
+  // Link: tee -> queue_app -> appsink
+  if (!gst_element_link_many(tee, queue_app, appsink, NULL)) {
+    g_printerr("ERROR - Failed to link tee to appsink\n");
+    return -1;
+  }
+
+  // Link display branch (conditional)
+  if (!DISABLE_DISPLAY) {
+     // Link: tee -> queue_display -> nvosd -> nvsink
+    if (!gst_element_link_many(tee, queue_display, nvosd, nvsink, NULL)) {
+      g_printerr("ERROR - Failed to link tee to display sink\n");
+      return -1;
+    }
+  } else {
+    // Tạo fakesink để terminate tee branch khi không có display
+    GstElement *fakesink = gst_element_factory_make("fakesink", "fakesink");
+    if (!fakesink || !gst_bin_add(GST_BIN(pipeline), fakesink)) {
+      g_printerr("ERROR - Failed to create fakesink\n");
+      return -1;
+    }
+    
+    g_object_set(G_OBJECT(fakesink), "async", FALSE, "sync", FALSE, NULL);
+
+    if (!gst_element_link_many(tee, fakesink, NULL)) {
+      g_printerr("ERROR - Failed to link tee to fakesink\n");
+      return -1;
+    }
+  }
+  //==============================================
 
   GstBus *bus = gst_pipeline_get_bus(GST_PIPELINE(pipeline));
   guint bus_watch_id = gst_bus_add_watch(bus, bus_call, loop);
   gst_object_unref(bus);
 
-  GstPad *nvosd_sink_pad = gst_element_get_static_pad(nvosd, "sink");
-  if (!nvosd_sink_pad) {
-    g_printerr("ERROR - Failed to get nvosd sink pad\n");
-    return -1;
+  // ===============================================
+  // perf measurement and osd sink pad probe
+  NvDsAppPerfStructInt *perf_struct = (NvDsAppPerfStructInt *) g_malloc0(sizeof(NvDsAppPerfStructInt)); 
+  
+  GstPad *perf_pad = NULL;
+  if(!DISABLE_DISPLAY) {
+    GstPad *nvosd_sink_pad = gst_element_get_static_pad(nvosd, "sink");
+    perf_pad = nvosd_sink_pad;
+    if (!nvosd_sink_pad) {
+      g_printerr("ERROR - Failed to get nvosd sink pad\n");
+      return -1;
+    }
+
+    gst_pad_add_probe(nvosd_sink_pad, GST_PAD_PROBE_TYPE_BUFFER,
+                      nvosd_sink_pad_buffer_probe, NULL, NULL);
+    gst_object_unref(nvosd_sink_pad);
+  }else{
+    perf_pad = gst_element_get_static_pad(tee, "sink");
+    if (!perf_pad) {
+      g_printerr("ERROR - Failed to get fakesink sink pad\n");
+      return -1;
+    }
   }
+  
+  enable_perf_measurement(perf_struct, perf_pad, 1, PERF_MEASUREMENT_INTERVAL_SEC, 0, perf_cb);
 
-  gst_pad_add_probe(nvosd_sink_pad, GST_PAD_PROBE_TYPE_BUFFER, nvosd_sink_pad_buffer_probe, NULL, NULL);
-
-  NvDsAppPerfStructInt *perf_struct = (NvDsAppPerfStructInt *) g_malloc0(sizeof(NvDsAppPerfStructInt));
-  enable_perf_measurement(perf_struct, nvosd_sink_pad, 1, PERF_MEASUREMENT_INTERVAL_SEC, 0, perf_cb);
-
-  gst_object_unref(nvosd_sink_pad);
-
+  // ===============================================
   gst_element_set_state(pipeline, GST_STATE_PAUSED);
 
   if (gst_element_set_state(pipeline, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
