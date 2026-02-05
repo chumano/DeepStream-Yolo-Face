@@ -1,4 +1,7 @@
 #include "deepstream.h"
+#include <jpeglib.h>
+#include <setjmp.h>
+#include "nvbufsurftransform.h"
 
 GOptionEntry entries[] = {
   {"source", 's', 0, G_OPTION_ARG_STRING, &SOURCE, "Source stream/file", NULL},
@@ -688,6 +691,341 @@ cleanup_detection_manager(void)
 }
 
 // =============================================================================
+// Image Processing Functions
+// =============================================================================
+
+typedef struct {
+  guint left;
+  guint top;
+  guint width;
+  guint height;
+} CropBox;
+
+static void
+calculate_crop_box(NvDsObjectMeta *obj_meta, CropBox *crop_box, guint frame_width, guint frame_height)
+{
+  // Add 20% padding around the bounding box
+  gfloat padding = 0.2f;
+  
+  gfloat pad_w = obj_meta->rect_params.width * padding;
+  gfloat pad_h = obj_meta->rect_params.height * padding;
+  
+  gint left = (gint)(obj_meta->rect_params.left - pad_w);
+  gint top = (gint)(obj_meta->rect_params.top - pad_h);
+  gint right = (gint)(obj_meta->rect_params.left + obj_meta->rect_params.width + pad_w);
+  gint bottom = (gint)(obj_meta->rect_params.top + obj_meta->rect_params.height + pad_h);
+  
+  // Clamp to frame boundaries
+  crop_box->left = MAX(0, left);
+  crop_box->top = MAX(0, top);
+  crop_box->width = MIN(right, (gint)frame_width) - crop_box->left;
+  crop_box->height = MIN(bottom, (gint)frame_height) - crop_box->top;
+}
+
+static gchar *
+encode_crop_to_base64_jpeg(NvBufSurface *surface, CropBox *crop_box, gint quality)
+{
+  if (!surface) {
+    g_printerr("ERROR - Surface is NULL\n");
+    return NULL;
+  }
+  
+  if (surface->numFilled < 1) {
+    g_printerr("ERROR - Surface has no filled buffers (numFilled=%d)\n", surface->numFilled);
+    return NULL;
+  }
+  
+  if (!surface->surfaceList) {
+    g_printerr("ERROR - Surface list is NULL\n");
+    return NULL;
+  }
+  
+  NvBufSurfaceParams *surf_params = &surface->surfaceList[0];
+  
+  // Additional validation
+  if (!surf_params) {
+    g_printerr("ERROR - Surface params is NULL\n");
+    return NULL;
+  }
+  
+  if (surf_params->width == 0 || surf_params->height == 0) {
+    g_printerr("ERROR - Surface has invalid dimensions: %dx%d\n", 
+               surf_params->width, surf_params->height);
+    return NULL;
+  }
+  
+  g_print("DEBUG - Surface info: width=%d, height=%d, pitch=%d, colorFormat=%d, memType=%d\n",
+          surf_params->width, surf_params->height, surf_params->pitch,
+          surface->surfaceList[0].colorFormat, surface->memType);
+  
+  // Validate crop box
+  if (crop_box->left >= surf_params->width || crop_box->top >= surf_params->height ||
+      crop_box->width == 0 || crop_box->height == 0) {
+    g_printerr("ERROR - Invalid crop box: left=%u, top=%u, width=%u, height=%u (surface: %dx%d)\n",
+               crop_box->left, crop_box->top, crop_box->width, crop_box->height,
+               surf_params->width, surf_params->height);
+    return NULL;
+  }
+  
+  // Ensure crop doesn't exceed surface bounds
+  if (crop_box->left + crop_box->width > surf_params->width) {
+    crop_box->width = surf_params->width - crop_box->left;
+  }
+  if (crop_box->top + crop_box->height > surf_params->height) {
+    crop_box->height = surf_params->height - crop_box->top;
+  }
+  
+  if (crop_box->width < 10 || crop_box->height < 10) {
+    g_printerr("ERROR - Crop box too small: %ux%u\n", crop_box->width, crop_box->height);
+    return NULL;
+  }
+
+  // Create destination surface for cropped RGBA image
+  // Use CUDA_UNIFIED for transform compatibility, then copy to CPU
+  NvBufSurface *dst_surface = NULL;
+  NvBufSurfaceCreateParams create_params = {0};
+  create_params.gpuId = surface->gpuId;
+  create_params.width = crop_box->width;
+  create_params.height = crop_box->height;
+  create_params.size = 0;
+  create_params.isContiguous = 1;
+  create_params.colorFormat = NVBUF_COLOR_FORMAT_RGBA;
+  create_params.layout = NVBUF_LAYOUT_PITCH;
+#ifdef __aarch64__
+  create_params.memType = NVBUF_MEM_DEFAULT;
+#else
+  // Use CUDA_UNIFIED - supported by NvBufSurfTransform and accessible from CPU
+  create_params.memType = NVBUF_MEM_CUDA_UNIFIED;
+#endif
+  
+  g_print("DEBUG - Creating destination surface: %ux%u (RGBA, memType=%d)\n", 
+          crop_box->width, crop_box->height, create_params.memType);
+  
+  if (NvBufSurfaceCreate(&dst_surface, 1, &create_params) != 0) {
+    g_printerr("ERROR - Failed to create destination surface\n");
+    return NULL;
+  }
+  
+  g_print("DEBUG - Created dst_surface with memType=%d\n", dst_surface->memType);
+  
+  // Setup transform parameters for cropping AND color conversion
+  NvBufSurfTransformParams transform_params = {0};
+  NvBufSurfTransformRect src_rect = {0};
+  NvBufSurfTransformRect dst_rect = {0};
+  
+  src_rect.top = crop_box->top;
+  src_rect.left = crop_box->left;
+  src_rect.width = crop_box->width;
+  src_rect.height = crop_box->height;
+  
+  dst_rect.top = 0;
+  dst_rect.left = 0;
+  dst_rect.width = crop_box->width;
+  dst_rect.height = crop_box->height;
+  
+  transform_params.src_rect = &src_rect;
+  transform_params.dst_rect = &dst_rect;
+  transform_params.transform_flag = NVBUFSURF_TRANSFORM_CROP_SRC |
+                                    NVBUFSURF_TRANSFORM_CROP_DST |
+                                    NVBUFSURF_TRANSFORM_FILTER;
+  transform_params.transform_filter = NvBufSurfTransformInter_Default;
+  
+  // Perform GPU-accelerated crop and format conversion
+  NvBufSurfTransformConfigParams config_params = {0};
+  config_params.compute_mode = NvBufSurfTransformCompute_Default;
+  config_params.gpu_id = surface->gpuId;
+  config_params.cuda_stream = NULL;
+  
+  g_print("DEBUG - Setting transform session params\n");
+  g_print("DEBUG - Source format: %d, Dest format: %d\n", 
+          surface->surfaceList[0].colorFormat, 
+          dst_surface->surfaceList[0].colorFormat);
+  
+  if (NvBufSurfTransformSetSessionParams(&config_params) != 0) {
+    g_printerr("ERROR - Failed to set transform session params\n");
+    NvBufSurfaceDestroy(dst_surface);
+    return NULL;
+  }
+  
+  g_print("DEBUG - Performing surface transform (crop + color convert)\n");
+  
+  NvBufSurfTransform_Error transform_err = NvBufSurfTransform(surface, dst_surface, &transform_params);
+  if (transform_err != NvBufSurfTransformError_Success) {
+    g_printerr("ERROR - Failed to transform surface, error=%d\n", transform_err);
+    NvBufSurfaceDestroy(dst_surface);
+    return NULL;
+  }
+  
+  // Synchronize CUDA operations to ensure transform is complete
+  cudaError_t cuda_err = cudaStreamSynchronize(0);
+  if (cuda_err != cudaSuccess) {
+    g_printerr("WARNING - cudaStreamSynchronize failed: %s\n", cudaGetErrorString(cuda_err));
+  }
+  
+  NvBufSurfaceParams *dst_params = &dst_surface->surfaceList[0];
+  guint crop_w = dst_params->width;
+  guint crop_h = dst_params->height;
+  guint dst_pitch = dst_params->pitch;
+  NvBufSurfaceColorFormat dst_color_format = dst_params->colorFormat;
+  
+  g_print("DEBUG - dst_params: width=%u, height=%u, pitch=%u, colorFormat=%d, memType=%d\n",
+          crop_w, crop_h, dst_pitch, dst_color_format, dst_surface->memType);
+  g_print("DEBUG - dataPtr=%p\n", dst_params->dataPtr);
+  
+  // Allocate CPU buffer for the image data
+  guint buffer_size = dst_pitch * crop_h;
+  guchar *cpu_buffer = (guchar *)g_malloc(buffer_size);
+  if (!cpu_buffer) {
+    g_printerr("ERROR - Failed to allocate CPU buffer (%u bytes)\n", buffer_size);
+    NvBufSurfaceDestroy(dst_surface);
+    return NULL;
+  }
+  
+  gboolean data_copied = FALSE;
+  
+  // For CUDA_UNIFIED memory, we can access it directly from CPU after sync
+  // But we still need to copy it to our own buffer to be safe
+  if (dst_surface->memType == NVBUF_MEM_CUDA_UNIFIED && dst_params->dataPtr) {
+    g_print("DEBUG - CUDA_UNIFIED memory, copying via cudaMemcpy\n");
+    cuda_err = cudaMemcpy(cpu_buffer, dst_params->dataPtr, buffer_size, cudaMemcpyDeviceToHost);
+    if (cuda_err == cudaSuccess) {
+      data_copied = TRUE;
+      g_print("DEBUG - cudaMemcpy succeeded\n");
+    } else {
+      g_printerr("WARNING - cudaMemcpy failed: %s, trying direct access\n", cudaGetErrorString(cuda_err));
+      // For unified memory, direct access might work after sync
+      cudaDeviceSynchronize();
+      memcpy(cpu_buffer, dst_params->dataPtr, buffer_size);
+      data_copied = TRUE;
+      g_print("DEBUG - Direct memcpy from unified memory succeeded\n");
+    }
+  }
+  
+  if (!data_copied) {
+    // Try mapping the surface
+    g_print("DEBUG - Attempting to map surface\n");
+    if (NvBufSurfaceMap(dst_surface, 0, 0, NVBUF_MAP_READ) == 0) {
+      NvBufSurfaceSyncForCpu(dst_surface, 0, 0);
+      
+      guchar *mapped_data = NULL;
+      if (dst_params->mappedAddr.addr[0]) {
+        mapped_data = (guchar *)dst_params->mappedAddr.addr[0];
+      } else if (dst_params->dataPtr) {
+        mapped_data = (guchar *)dst_params->dataPtr;
+      }
+      
+      if (mapped_data) {
+        g_print("DEBUG - Mapped data available at %p\n", mapped_data);
+        memcpy(cpu_buffer, mapped_data, buffer_size);
+        data_copied = TRUE;
+      }
+      
+      NvBufSurfaceUnMap(dst_surface, 0, 0);
+    } else {
+      g_print("DEBUG - Map failed\n");
+    }
+  }
+  
+  if (!data_copied && dst_params->dataPtr) {
+    // Last resort: try cudaMemcpy even if memType detection failed
+    g_print("DEBUG - Last resort: cudaMemcpy from %p\n", dst_params->dataPtr);
+    cuda_err = cudaMemcpy(cpu_buffer, dst_params->dataPtr, buffer_size, cudaMemcpyDeviceToHost);
+    if (cuda_err == cudaSuccess) {
+      data_copied = TRUE;
+      g_print("DEBUG - cudaMemcpy succeeded\n");
+    } else {
+      g_printerr("ERROR - cudaMemcpy failed: %s\n", cudaGetErrorString(cuda_err));
+    }
+  }
+  
+  if (!data_copied) {
+    g_printerr("ERROR - Failed to copy surface data to CPU\n");
+    g_free(cpu_buffer);
+    NvBufSurfaceDestroy(dst_surface);
+    return NULL;
+  }
+  
+  // Debug: Print first 32 bytes of data
+  g_print("DEBUG - First 32 bytes of CPU data: ");
+  for (int i = 0; i < 32 && i < (int)buffer_size; i++) {
+    g_print("%02x ", cpu_buffer[i]);
+  }
+  g_print("\n");
+  
+  NvBufSurfaceDestroy(dst_surface);
+  
+  // Now convert from RGBA to RGB for JPEG encoding
+  guint rgb_row_bytes = crop_w * 3;
+  guchar *rgb_data = (guchar *)g_malloc(rgb_row_bytes * crop_h);
+  if (!rgb_data) {
+    g_printerr("ERROR - Failed to allocate RGB buffer\n");
+    g_free(cpu_buffer);
+    return NULL;
+  }
+  
+  g_print("DEBUG - Converting RGBA to RGB: %ux%u\n", crop_w, crop_h);
+  
+  // RGBA to RGB conversion
+  for (guint y = 0; y < crop_h; y++) {
+    guchar *src_row = cpu_buffer + y * dst_pitch;
+    guchar *dst_row = rgb_data + y * rgb_row_bytes;
+    
+    for (guint x = 0; x < crop_w; x++) {
+      dst_row[x * 3 + 0] = src_row[x * 4 + 0];  // R
+      dst_row[x * 3 + 1] = src_row[x * 4 + 1];  // G
+      dst_row[x * 3 + 2] = src_row[x * 4 + 2];  // B
+      // Skip alpha (x * 4 + 3)
+    }
+  }
+  
+  g_free(cpu_buffer);
+  
+  g_print("DEBUG - Encoding to JPEG\n");
+  
+  // Encode to JPEG in memory
+  struct jpeg_compress_struct cinfo;
+  struct jpeg_error_mgr jerr;
+  
+  cinfo.err = jpeg_std_error(&jerr);
+  jpeg_create_compress(&cinfo);
+  
+  unsigned char *jpeg_buffer = NULL;
+  unsigned long jpeg_size = 0;
+  
+  jpeg_mem_dest(&cinfo, &jpeg_buffer, &jpeg_size);
+  
+  cinfo.image_width = crop_w;
+  cinfo.image_height = crop_h;
+  cinfo.input_components = 3;
+  cinfo.in_color_space = JCS_RGB;
+  
+  jpeg_set_defaults(&cinfo);
+  jpeg_set_quality(&cinfo, quality, TRUE);
+  
+  jpeg_start_compress(&cinfo, TRUE);
+  
+  JSAMPROW row_pointer[1];
+  while (cinfo.next_scanline < cinfo.image_height) {
+    row_pointer[0] = &rgb_data[cinfo.next_scanline * rgb_row_bytes];
+    jpeg_write_scanlines(&cinfo, row_pointer, 1);
+  }
+  
+  jpeg_finish_compress(&cinfo);
+  jpeg_destroy_compress(&cinfo);
+  
+  g_free(rgb_data);
+  
+  // Encode to base64
+  gchar *base64_image = g_base64_encode(jpeg_buffer, jpeg_size);
+  
+  free(jpeg_buffer); // libjpeg uses malloc
+  
+  g_print("DEBUG - Successfully encoded image to base64 (size=%lu)\n", jpeg_size);
+  
+  return base64_image;
+}
+
+// =============================================================================
 // Send Detection to Kafka
 // =============================================================================
 
@@ -695,15 +1033,28 @@ static void
 send_detection_to_kafka(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta, 
                         Landmark *landmarks, guint num_landmarks,
                         gboolean is_good_face, gdouble quality_score,
-                        FaceQualityMetrics *metrics)
+                        FaceQualityMetrics *metrics, NvBufSurface *surface)
 {
   if (!detection_manager || !detection_manager->enabled) {
     return;
   }
   
+  // Calculate crop box
+  g_printf("INFO - Calculating crop box for object_id=%lu\n", obj_meta->object_id);
+  CropBox crop_box;
+  calculate_crop_box(obj_meta, &crop_box, STREAMMUX_WIDTH, STREAMMUX_HEIGHT);
+  
+  // Encode cropped face to base64 JPEG (may be NULL if surface is unavailable)
+  gchar *face_image_base64 = NULL;
+  if (surface) {
+    g_printf("INFO - Encoding cropped face image for object_id=%lu\n", obj_meta->object_id);
+    face_image_base64 = encode_crop_to_base64_jpeg(surface, &crop_box, 85);
+  }
+  
   // Build JSON string
   GString *json = g_string_new("{");
   
+  g_printf("INFO - Building JSON for object_id=%lu\n", obj_meta->object_id);
   // Timestamp
   g_string_append_printf(json, "\"timestamp\": %.3f,", get_current_time());
   
@@ -712,10 +1063,18 @@ send_detection_to_kafka(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta,
   g_string_append_printf(json, "\"class_id\": %d,", obj_meta->class_id);
   g_string_append_printf(json, "\"confidence\": %.4f,", obj_meta->confidence);
   
+  // Frame size
+  g_string_append_printf(json, "\"frame_size\": {\"width\": %d, \"height\": %d},",
+                         STREAMMUX_WIDTH, STREAMMUX_HEIGHT);
+  
   // Bounding box
   g_string_append_printf(json, "\"bbox\": {\"left\": %.2f, \"top\": %.2f, \"width\": %.2f, \"height\": %.2f},",
                          obj_meta->rect_params.left, obj_meta->rect_params.top,
                          obj_meta->rect_params.width, obj_meta->rect_params.height);
+  
+  // Crop box
+  g_string_append_printf(json, "\"crop_bbox\": {\"left\": %u, \"top\": %u, \"width\": %u, \"height\": %u},",
+                         crop_box.left, crop_box.top, crop_box.width, crop_box.height);
   
   // Landmarks
   g_string_append(json, "\"landmarks\": [");
@@ -742,6 +1101,12 @@ send_detection_to_kafka(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta,
   // Frame info
   g_string_append_printf(json, "\"frame_number\": %u,", frame_meta->frame_num);
   g_string_append_printf(json, "\"source_id\": %u", frame_meta->source_id);
+  
+  // Face image (base64 encoded JPEG)
+  if (face_image_base64) {
+    g_string_append_printf(json, ",\"face_image\": \"%s\"", face_image_base64);
+    g_free(face_image_base64);
+  }
   
   g_string_append(json, "}");
   
@@ -784,7 +1149,7 @@ set_custom_bbox(NvDsObjectMeta *obj_meta)
 }
 
 static void
-process_face_from_meta(NvDsBatchMeta *batch_meta, NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta)
+process_face_from_meta(NvDsBatchMeta *batch_meta, NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta, NvBufSurface *surface)
 {
   NvDsDisplayMeta *display_meta = NULL;
 
@@ -845,11 +1210,15 @@ process_face_from_meta(NvDsBatchMeta *batch_meta, NvDsFrameMeta *frame_meta, NvD
     gdouble quality_score = 0.0;
     FaceQualityMetrics metrics = {0};
     
+    g_printf("INFO - Assessing face quality for object ID %lu with %u landmarks\n",
+            obj_meta->object_id, num_joints);
     assess_face_quality(landmarks, num_joints, &is_good_face, &quality_score, &metrics);
     
-    // Send detection to Kafka
+    g_printf("INFO - Face quality for object ID %lu: is_good_face=%s, quality_score=%.3f\n",
+            obj_meta->object_id, is_good_face ? "true" : "false", quality_score);
+    // Send detection to Kafka with surface
     send_detection_to_kafka(frame_meta, obj_meta, landmarks, num_joints,
-                            is_good_face, quality_score, &metrics);
+                            is_good_face, quality_score, &metrics, surface);
   }
 
   if (landmarks) {
@@ -868,6 +1237,33 @@ nvosd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_da
   GstBuffer *buf = (GstBuffer *) info->data;
   NvDsBatchMeta *batch_meta = gst_buffer_get_nvds_batch_meta(buf);
   
+  if (!batch_meta) {
+    g_printerr("ERROR - Failed to get batch meta\n");
+    return GST_PAD_PROBE_OK;
+  }
+  
+  // Get NvBufSurface from GstBuffer using the correct DeepStream method
+  GstMapInfo map_info;
+  if (!gst_buffer_map(buf, &map_info, GST_MAP_READ)) {
+    g_printerr("ERROR - Failed to map buffer\n");
+    return GST_PAD_PROBE_OK;
+  }
+  
+  NvBufSurface *surface = (NvBufSurface *)map_info.data;
+  
+  // Validate surface before use
+  gboolean surface_valid = (surface != NULL && 
+                            surface->numFilled > 0 && 
+                            surface->surfaceList != NULL);
+  
+  if (surface_valid) {
+    g_print("DEBUG - Got valid surface: numFilled=%d, memType=%d\n", 
+            surface->numFilled, surface->memType);
+  } else {
+    g_print("WARNING - Invalid or NULL surface\n");
+    surface = NULL;
+  }
+
   // each frame in batch
   NvDsMetaList *l_frame = NULL;
   for (l_frame = batch_meta->frame_meta_list; l_frame != NULL; l_frame = l_frame->next) {
@@ -877,10 +1273,13 @@ nvosd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_da
     for (l_obj = frame_meta->obj_meta_list; l_obj != NULL; l_obj = l_obj->next) {
       NvDsObjectMeta *obj_meta = (NvDsObjectMeta *) (l_obj->data);
 
-      process_face_from_meta(batch_meta, frame_meta, obj_meta);
+      // Process face with surface parameter
+      process_face_from_meta(batch_meta, frame_meta, obj_meta, surface);
       set_custom_bbox(obj_meta);
     }
   }
+  
+  gst_buffer_unmap(buf, &map_info);
 
   return GST_PAD_PROBE_OK;
 }
@@ -1087,7 +1486,7 @@ main(gint argc, char *argv[])
     return -1;
   }
 
-  GstElement *nvvidconv = gst_element_factory_make("nvvideoconvert", "nvvideoconvert");
+  GstElement *nvvidconv = gst_element_factory_make("nvvideoconvert", "nvvidconv");
   if (!nvvidconv || !gst_bin_add(GST_BIN(pipeline), nvvidconv)) {
     g_printerr("ERROR - Failed to create nvvideoconvert\n");
     return -1;

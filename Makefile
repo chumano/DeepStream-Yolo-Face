@@ -17,7 +17,7 @@ ifeq ($(TARGET_DEVICE), aarch64)
 endif
 
 # Kafka support (optional) - build with: make KAFKA=1
-KAFKA?=0
+KAFKA?=1
 ifeq ($(KAFKA), 1)
 	CFLAGS+= -DKAFKA_ENABLED_BUILD
 	KAFKA_LIBS:= -lrdkafka
@@ -41,8 +41,8 @@ CFLAGS+= -I$(DS_SDK_ROOT)/sources/apps/apps-common/includes -I$(DS_SDK_ROOT)/sou
 CFLAGS+= `pkg-config --cflags $(PKGS)`
 LIBS:= `pkg-config --libs $(PKGS)`
 
-LIBS+= -L$(LIB_INSTALL_DIR) -lnvdsgst_meta -lnvds_meta -lnvdsgst_helper -L/usr/local/cuda-$(CUDA_VER)/lib64/ -lcudart \
-       -lcuda -Wl,-rpath,$(LIB_INSTALL_DIR) $(KAFKA_LIBS) -lm
+LIBS+= -L$(LIB_INSTALL_DIR) -lnvdsgst_meta -lnvds_meta -lnvdsgst_helper -lnvbufsurftransform -lnvbufsurface -L/usr/local/cuda-$(CUDA_VER)/lib64/ -lcudart \
+       -lcuda -Wl,-rpath,$(LIB_INSTALL_DIR) $(KAFKA_LIBS) -lm -ljpeg
 
 all: $(APP)
 
@@ -54,6 +54,11 @@ $(APP): $(OBJS) Makefile
 
 clean:
 	rm -rf $(OBJS) $(APP)
+
+run: $(APP)
+	GST_DEBUG=*:3 ./$(APP) -s file:///app/videos/faces_tracking.mp4  \
+	   	-c config_infer_primary_yoloV8_face.txt  \
+		--kafka-broker kafka:29092   --kafka-topic face-detection
 
 .PHONY: all clean help
 
