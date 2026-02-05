@@ -1043,7 +1043,7 @@ encode_crop_to_base64_jpeg(NvBufSurface *surface, CropBox *crop_box, gint qualit
 // =============================================================================
 
 static void
-send_detection_to_kafka(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta, 
+process_face_detection(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta, 
                         Landmark *landmarks, guint num_landmarks,
                         gboolean is_good_face, gdouble quality_score,
                         FaceQualityMetrics *metrics, NvBufSurface *surface)
@@ -1051,6 +1051,9 @@ send_detection_to_kafka(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta,
   if (!detection_manager || !detection_manager->enabled) {
     return;
   }
+
+  // TODO: reject low-quality faces early
+
 
   // Calculate crop box
   GST_DEBUG("Calculating crop box for object_id=%lu", obj_meta->object_id);
@@ -1178,7 +1181,7 @@ set_custom_bbox(NvDsObjectMeta *obj_meta)
 }
 
 static void
-process_face_from_meta(NvDsBatchMeta *batch_meta, NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta, NvBufSurface *surface)
+process_a_frame(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta, NvBufSurface *surface)
 {
   guint num_joints = obj_meta->mask_params.size / (sizeof(float) * 3);
 
@@ -1207,6 +1210,8 @@ process_face_from_meta(NvDsBatchMeta *batch_meta, NvDsFrameMeta *frame_meta, NvD
     }
   }
 
+  // TODO: save frame jpg to disk
+
   // Assess face quality and send to Kafka if enabled
   if (KAFKA_ENABLED && landmarks && num_joints >= 5) {
     gboolean is_good_face = FALSE;
@@ -1220,7 +1225,7 @@ process_face_from_meta(NvDsBatchMeta *batch_meta, NvDsFrameMeta *frame_meta, NvD
     GST_DEBUG("Face quality for object ID %lu: is_good_face=%s, quality_score=%.3f",
             obj_meta->object_id, is_good_face ? "true" : "false", quality_score);
     // Send detection to Kafka with surface
-    send_detection_to_kafka(frame_meta, obj_meta, landmarks, num_joints,
+    process_face_detection(frame_meta, obj_meta, landmarks, num_joints,
                             is_good_face, quality_score, &metrics, surface);
   }
 
@@ -1508,7 +1513,7 @@ appsink_new_sample_callback(GstElement *appsink, gpointer user_data)
       NvDsObjectMeta *obj_meta = (NvDsObjectMeta *)(l_obj->data);
       
       // Process face with surface parameter
-      process_face_from_meta(batch_meta, frame_meta, obj_meta, surface);
+      process_a_frame(frame_meta, obj_meta, surface);
     }
   }
   
