@@ -16,7 +16,8 @@ GOptionEntry entries[] = {
   {"kafka-broker", 'k', 0, G_OPTION_ARG_STRING, &KAFKA_BROKER, "Kafka broker address (e.g., localhost:9092)", NULL},
   {"kafka-topic", 't', 0, G_OPTION_ARG_STRING, &KAFKA_TOPIC, "Kafka topic name (default: face-detections)", NULL},
   {"kafka-delay", 'd', 0, G_OPTION_ARG_DOUBLE, &KAFKA_SEND_DELAY_SEC, "Delay in seconds before sending to Kafka (default: 2.0)", NULL},
-  {"kafka-quality-threshold", 'q', 0, G_OPTION_ARG_DOUBLE, &KAFKA_QUALITY_IMPROVEMENT_THRESHOLD, "Minimum quality improvement to resend (default: 0.1)", NULL},
+  {"kafka-quality-threshold", 'q', 0, G_OPTION_ARG_DOUBLE, &KAFKA_QUALITY_IMPROVEMENT_THRESHOLD, "Minimum quality improvement to resend (default: 0.005)", NULL},
+  {"disable-crop-image", 0, G_OPTION_FLAG_REVERSE, G_OPTION_ARG_NONE, &ENABLE_CROP_IMAGE, "Disable crop image in Kafka JSON", NULL},
   {NULL}
 };
 
@@ -481,11 +482,14 @@ detection_manager_send_kafka(DetectionManager *manager, Detection *detection)
 {
 #ifdef KAFKA_ENABLED_BUILD
   if (manager->kafka_producer == NULL || manager->kafka_topic == NULL) {
-    g_print("INFO - Kafka not connected, would send: object_id=%lu, quality=%.3f\n",
+    GST_DEBUG("INFO - Kafka not connected, would send: object_id=%lu, quality=%.3f\n",
             detection->object_id, detection->quality_score);
     return TRUE;
   }
-  
+  // print 
+  GST_INFO("INFO - Sending to Kafka: object_id=%lu, quality=%.3f\n",
+          detection->object_id, detection->quality_score);
+
   // Send message to Kafka
   gint err = rd_kafka_produce(
       manager->kafka_topic,
@@ -498,7 +502,7 @@ detection_manager_send_kafka(DetectionManager *manager, Detection *detection)
   );
   
   if (err == -1) {
-    g_printerr("ERROR - Failed to produce message: %s\n", 
+    GST_ERROR("ERROR - Failed to produce message: %s\n", 
                rd_kafka_err2str(rd_kafka_last_error()));
     return FALSE;
   }
@@ -548,6 +552,11 @@ detection_manager_queue(DetectionManager *manager, guint64 object_id,
     detection_manager_increment_stat(manager, "skipped");
     detection_free(detection);
     return;
+  }
+
+  if( pending ) {
+    GST_DEBUG("Replacing pending detection for object_id=%lu (old_quality=%.3f, new_quality=%.3f)\n",
+             object_id, pending->quality_score, quality_score);
   }
   
   detection_store_set_pending(manager->store, detection);
@@ -658,20 +667,20 @@ init_detection_manager(void)
   if (detection_manager->kafka_producer) {
     detection_manager->kafka_topic = kafka_topic_create(detection_manager->kafka_producer, KAFKA_TOPIC);
     if (!detection_manager->kafka_topic) {
-      g_printerr("WARNING - Failed to create Kafka topic, running without Kafka\n");
+      GST_WARNING("WARNING - Failed to create Kafka topic, running without Kafka\n");
       kafka_producer_destroy(detection_manager->kafka_producer, NULL);
       detection_manager->kafka_producer = NULL;
     }
   } else {
-    g_printerr("WARNING - Failed to create Kafka producer, running without Kafka\n");
+    GST_WARNING("WARNING - Failed to create Kafka producer, running without Kafka\n");
   }
 #else
-  g_print("WARNING - Kafka support not compiled in. Build with KAFKA=1 to enable.\n");
+  GST_WARNING("WARNING - Kafka support not compiled in. Build with KAFKA=1 to enable.\n");
   detection_manager->kafka_producer = NULL;
   detection_manager->kafka_topic = NULL;
 #endif
   
-  g_print("INFO - Detection manager initialized (Kafka: %s, Topic: %s)\n",
+  GST_DEBUG("Detection manager initialized (Kafka: %s, Topic: %s)\n",
           KAFKA_BROKER, KAFKA_TOPIC);
 }
 
@@ -1042,21 +1051,21 @@ send_detection_to_kafka(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta,
   }
 
   // Calculate crop box
-  GST_INFO("Calculating crop box for object_id=%lu", obj_meta->object_id);
+  GST_DEBUG("Calculating crop box for object_id=%lu", obj_meta->object_id);
   CropBox crop_box;
   calculate_crop_box(obj_meta, &crop_box, STREAMMUX_WIDTH, STREAMMUX_HEIGHT);
 
   // Encode cropped face to base64 JPEG (may be NULL if surface is unavailable)
   gchar *face_image_base64 = NULL;
-  if (surface) {
-    GST_INFO("Encoding cropped face image for object_id=%lu", obj_meta->object_id);
+  if (ENABLE_CROP_IMAGE && surface) {
+    GST_DEBUG("Encoding cropped face image for object_id=%lu", obj_meta->object_id);
     face_image_base64 = encode_crop_to_base64_jpeg(surface, &crop_box, 85);
   }
 
   // Build JSON string
   GString *json = g_string_new("{");
 
-  GST_INFO("Building JSON for object_id=%lu", obj_meta->object_id);
+  GST_DEBUG("Building JSON for object_id=%lu", obj_meta->object_id);
   // Timestamp
   g_string_append_printf(json, "\"timestamp\": %.3f,", get_current_time());
   
@@ -1105,7 +1114,7 @@ send_detection_to_kafka(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta,
   g_string_append_printf(json, "\"source_id\": %u", frame_meta->source_id);
   
   // Face image (base64 encoded JPEG)
-  if (face_image_base64) {
+  if (ENABLE_CROP_IMAGE && face_image_base64) {
     g_string_append_printf(json, ",\"face_image\": \"%s\"", face_image_base64);
     g_free(face_image_base64);
   }
@@ -1212,11 +1221,11 @@ process_face_from_meta(NvDsBatchMeta *batch_meta, NvDsFrameMeta *frame_meta, NvD
     gdouble quality_score = 0.0;
     FaceQualityMetrics metrics = {0};
 
-    GST_INFO("Assessing face quality for object ID %lu with %u landmarks",
+    GST_DEBUG("Assessing face quality for object ID %lu with %u landmarks",
             obj_meta->object_id, num_joints);
     assess_face_quality(landmarks, num_joints, &is_good_face, &quality_score, &metrics);
 
-    GST_INFO("Face quality for object ID %lu: is_good_face=%s, quality_score=%.3f",
+    GST_DEBUG("Face quality for object ID %lu: is_good_face=%s, quality_score=%.3f",
             obj_meta->object_id, is_good_face ? "true" : "false", quality_score);
     // Send detection to Kafka with surface
     send_detection_to_kafka(frame_meta, obj_meta, landmarks, num_joints,
@@ -1526,22 +1535,23 @@ main(gint argc, char *argv[])
     }
   }
 
-  GST_INFO("\n");
-  GST_INFO("SOURCE: %s", SOURCE);
-  GST_INFO("INFER_CONFIG: %s", INFER_CONFIG);
-  GST_INFO("STREAMMUX_BATCH_SIZE: %d", STREAMMUX_BATCH_SIZE);
-  GST_INFO("STREAMMUX_WIDTH: %d", STREAMMUX_WIDTH);
-  GST_INFO("STREAMMUX_HEIGHT: %d", STREAMMUX_HEIGHT);
-  GST_INFO("GPU_ID: %d", GPU_ID);
-  GST_INFO("PERF_MEASUREMENT_INTERVAL_SEC: %d", PERF_MEASUREMENT_INTERVAL_SEC);
-  GST_INFO("JETSON: %s", JETSON ? "TRUE" : "FALSE");
+  GST_DEBUG("\n");
+  GST_DEBUG("SOURCE: %s", SOURCE);
+  GST_DEBUG("INFER_CONFIG: %s", INFER_CONFIG);
+  GST_DEBUG("STREAMMUX_BATCH_SIZE: %d", STREAMMUX_BATCH_SIZE);
+  GST_DEBUG("STREAMMUX_WIDTH: %d", STREAMMUX_WIDTH);
+  GST_DEBUG("STREAMMUX_HEIGHT: %d", STREAMMUX_HEIGHT);
+  GST_DEBUG("GPU_ID: %d", GPU_ID);
+  GST_DEBUG("PERF_MEASUREMENT_INTERVAL_SEC: %d", PERF_MEASUREMENT_INTERVAL_SEC);
+  GST_DEBUG("JETSON: %s", JETSON ? "TRUE" : "FALSE");
   if (KAFKA_ENABLED) {
-    GST_INFO("KAFKA_BROKER: %s", KAFKA_BROKER);
-    GST_INFO("KAFKA_TOPIC: %s", KAFKA_TOPIC);
-    GST_INFO("KAFKA_SEND_DELAY_SEC: %.1f", KAFKA_SEND_DELAY_SEC);
-    GST_INFO("KAFKA_QUALITY_IMPROVEMENT_THRESHOLD: %.2f", KAFKA_QUALITY_IMPROVEMENT_THRESHOLD);
+    GST_DEBUG("KAFKA_BROKER: %s", KAFKA_BROKER);
+    GST_DEBUG("KAFKA_TOPIC: %s", KAFKA_TOPIC);
+    GST_DEBUG("KAFKA_SEND_DELAY_SEC: %.1f", KAFKA_SEND_DELAY_SEC);
+    GST_DEBUG("KAFKA_QUALITY_IMPROVEMENT_THRESHOLD: %.2f", KAFKA_QUALITY_IMPROVEMENT_THRESHOLD);
   }
-  GST_INFO("\n");
+  GST_DEBUG("ENABLE_CROP_IMAGE: %s", ENABLE_CROP_IMAGE ? "TRUE" : "FALSE");
+  GST_DEBUG("\n");
 
   GstCaps *caps = gst_caps_from_string("video/x-raw(memory:NVMM), format=RGBA");
   g_object_set(G_OBJECT(capsfilter), "caps", caps, NULL);
@@ -1600,7 +1610,7 @@ main(gint argc, char *argv[])
     return -1;
   }
 
-  GST_INFO("\n");
+  GST_DEBUG("\n");
 
   g_main_loop_run(loop);
 
