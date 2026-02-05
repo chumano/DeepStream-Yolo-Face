@@ -52,6 +52,11 @@ static gboolean ENABLE_CROP_IMAGE = TRUE;
 // Display settings
 static gboolean DISABLE_DISPLAY = FALSE;
 
+// Frame saving settings
+static gboolean ENABLE_FRAME_SAVE = TRUE;
+static gchar *FRAME_SAVE_DIR = NULL;
+static guint FRAME_SAVE_QUALITY = 70; // JPEG quality (0-100)
+
 // =============================================================================
 // Detection Manager Structures
 // =============================================================================

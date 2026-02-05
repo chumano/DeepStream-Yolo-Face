@@ -19,6 +19,9 @@ GOptionEntry entries[] = {
   {"kafka-quality-threshold", 'q', 0, G_OPTION_ARG_DOUBLE, &KAFKA_QUALITY_IMPROVEMENT_THRESHOLD, "Minimum quality improvement to resend (default: 0.005)", NULL},
   {"disable-crop-image", 0, G_OPTION_FLAG_REVERSE, G_OPTION_ARG_NONE, &ENABLE_CROP_IMAGE, "Disable crop image in Kafka JSON", NULL},
   {"disable-display", 0, 0, G_OPTION_ARG_NONE, &DISABLE_DISPLAY, "Disable video display output", NULL},
+  {"enable-frame-save", 0, 0, G_OPTION_ARG_NONE, &ENABLE_FRAME_SAVE, "Enable saving frames to disk", NULL},
+  {"frame-save-dir", 0, 0, G_OPTION_ARG_STRING, &FRAME_SAVE_DIR, "Directory to save frames (default: ./outputs/frames)", NULL},
+  {"frame-save-quality", 0, 0, G_OPTION_ARG_INT, &FRAME_SAVE_QUALITY, "JPEG quality 0-100 (default: 85)", NULL},
   {NULL}
 };
 
@@ -1039,6 +1042,237 @@ encode_crop_to_base64_jpeg(NvBufSurface *surface, CropBox *crop_box, gint qualit
 }
 
 // =============================================================================
+// Frame Saving Functions
+// =============================================================================
+
+static gboolean
+ensure_frame_save_directory(const gchar *dir_path)
+{
+  if (!dir_path) {
+    return FALSE;
+  }
+  
+  // Check if directory exists
+  if (g_file_test(dir_path, G_FILE_TEST_IS_DIR)) {
+    return TRUE;
+  }
+  
+  // Try to create directory
+  if (g_mkdir_with_parents(dir_path, 0755) != 0) {
+    GST_ERROR("Failed to create directory: %s", dir_path);
+    return FALSE;
+  }
+  
+  GST_INFO("Created frame save directory: %s", dir_path);
+  return TRUE;
+}
+
+static gboolean
+save_frame_to_jpeg(NvBufSurface *surface, guint source_id, guint frame_num,
+                   const gchar *output_dir, gint quality)
+{
+  if (!surface || !output_dir) {
+    GST_ERROR("Invalid parameters for save_frame_to_jpeg");
+    return FALSE;
+  }
+
+  if (surface->numFilled < 1 || !surface->surfaceList) {
+    GST_ERROR("Surface has no data to save");
+    return FALSE;
+  }
+
+  NvBufSurfaceParams *surf_params = &surface->surfaceList[0];
+  
+  if (surf_params->width == 0 || surf_params->height == 0) {
+    GST_ERROR("Surface has invalid dimensions");
+    return FALSE;
+  }
+
+  // Generate filename with timestamp
+  GDateTime *now = g_date_time_new_now_local();
+  gchar *timestamp = g_date_time_format(now, "%Y%m%d_%H%M%S");
+  gchar *filename = g_strdup_printf("%s/frame_src%u_num%u_%s.jpg",
+                                    output_dir, source_id, frame_num, timestamp);
+  g_free(timestamp);
+  g_date_time_unref(now);
+
+  GST_DEBUG("Saving frame to: %s", filename);
+
+  // Create destination surface for RGB conversion
+  NvBufSurface *dst_surface = NULL;
+  NvBufSurfaceCreateParams create_params = {0};
+  create_params.gpuId = surface->gpuId;
+  create_params.width = surf_params->width;
+  create_params.height = surf_params->height;
+  create_params.size = 0;
+  create_params.isContiguous = 1;
+  create_params.colorFormat = NVBUF_COLOR_FORMAT_RGBA;
+  create_params.layout = NVBUF_LAYOUT_PITCH;
+#ifdef __aarch64__
+  create_params.memType = NVBUF_MEM_DEFAULT;
+#else
+  create_params.memType = NVBUF_MEM_CUDA_UNIFIED;
+#endif
+
+  if (NvBufSurfaceCreate(&dst_surface, 1, &create_params) != 0) {
+    GST_ERROR("Failed to create destination surface");
+    g_free(filename);
+    return FALSE;
+  }
+
+  // Setup transform parameters for color conversion
+  NvBufSurfTransformParams transform_params = {0};
+  transform_params.transform_flag = NVBUFSURF_TRANSFORM_FILTER;
+  transform_params.transform_filter = NvBufSurfTransformInter_Default;
+
+  NvBufSurfTransformConfigParams config_params = {0};
+  config_params.compute_mode = NvBufSurfTransformCompute_Default;
+  config_params.gpu_id = surface->gpuId;
+  config_params.cuda_stream = NULL;
+
+  if (NvBufSurfTransformSetSessionParams(&config_params) != 0) {
+    GST_ERROR("Failed to set transform session params");
+    NvBufSurfaceDestroy(dst_surface);
+    g_free(filename);
+    return FALSE;
+  }
+
+  if (NvBufSurfTransform(surface, dst_surface, &transform_params) != NvBufSurfTransformError_Success) {
+    GST_ERROR("Failed to transform surface");
+    NvBufSurfaceDestroy(dst_surface);
+    g_free(filename);
+    return FALSE;
+  }
+
+  // Synchronize CUDA operations
+  cudaStreamSynchronize(0);
+
+  NvBufSurfaceParams *dst_params = &dst_surface->surfaceList[0];
+  guint width = dst_params->width;
+  guint height = dst_params->height;
+  guint pitch = dst_params->pitch;
+
+  // Allocate CPU buffer
+  guint buffer_size = pitch * height;
+  guchar *cpu_buffer = (guchar *)g_malloc(buffer_size);
+  if (!cpu_buffer) {
+    GST_ERROR("Failed to allocate CPU buffer");
+    NvBufSurfaceDestroy(dst_surface);
+    g_free(filename);
+    return FALSE;
+  }
+
+  // Copy data to CPU
+  gboolean data_copied = FALSE;
+  
+  if (dst_surface->memType == NVBUF_MEM_CUDA_UNIFIED && dst_params->dataPtr) {
+    cudaError_t cuda_err = cudaMemcpy(cpu_buffer, dst_params->dataPtr, buffer_size, cudaMemcpyDeviceToHost);
+    if (cuda_err == cudaSuccess) {
+      data_copied = TRUE;
+    } else {
+      cudaDeviceSynchronize();
+      memcpy(cpu_buffer, dst_params->dataPtr, buffer_size);
+      data_copied = TRUE;
+    }
+  }
+
+  if (!data_copied) {
+    if (NvBufSurfaceMap(dst_surface, 0, 0, NVBUF_MAP_READ) == 0) {
+      NvBufSurfaceSyncForCpu(dst_surface, 0, 0);
+      guchar *mapped_data = dst_params->mappedAddr.addr[0] ? 
+                           (guchar *)dst_params->mappedAddr.addr[0] : 
+                           (guchar *)dst_params->dataPtr;
+      if (mapped_data) {
+        memcpy(cpu_buffer, mapped_data, buffer_size);
+        data_copied = TRUE;
+      }
+      NvBufSurfaceUnMap(dst_surface, 0, 0);
+    }
+  }
+
+  if (!data_copied && dst_params->dataPtr) {
+    cudaError_t cuda_err = cudaMemcpy(cpu_buffer, dst_params->dataPtr, buffer_size, cudaMemcpyDeviceToHost);
+    if (cuda_err == cudaSuccess) {
+      data_copied = TRUE;
+    }
+  }
+
+  NvBufSurfaceDestroy(dst_surface);
+
+  if (!data_copied) {
+    GST_ERROR("Failed to copy surface data to CPU");
+    g_free(cpu_buffer);
+    g_free(filename);
+    return FALSE;
+  }
+
+  // Convert RGBA to RGB
+  guint rgb_row_bytes = width * 3;
+  guchar *rgb_data = (guchar *)g_malloc(rgb_row_bytes * height);
+  if (!rgb_data) {
+    GST_ERROR("Failed to allocate RGB buffer");
+    g_free(cpu_buffer);
+    g_free(filename);
+    return FALSE;
+  }
+
+  for (guint y = 0; y < height; y++) {
+    guchar *src_row = cpu_buffer + y * pitch;
+    guchar *dst_row = rgb_data + y * rgb_row_bytes;
+    for (guint x = 0; x < width; x++) {
+      dst_row[x * 3 + 0] = src_row[x * 4 + 0];  // R
+      dst_row[x * 3 + 1] = src_row[x * 4 + 1];  // G
+      dst_row[x * 3 + 2] = src_row[x * 4 + 2];  // B
+    }
+  }
+  
+  g_free(cpu_buffer);
+
+  // Encode to JPEG and save to file
+  FILE *outfile = fopen(filename, "wb");
+  if (!outfile) {
+    GST_ERROR("Failed to open file for writing: %s", filename);
+    g_free(rgb_data);
+    g_free(filename);
+    return FALSE;
+  }
+
+  struct jpeg_compress_struct cinfo;
+  struct jpeg_error_mgr jerr;
+
+  cinfo.err = jpeg_std_error(&jerr);
+  jpeg_create_compress(&cinfo);
+  jpeg_stdio_dest(&cinfo, outfile);
+
+  cinfo.image_width = width;
+  cinfo.image_height = height;
+  cinfo.input_components = 3;
+  cinfo.in_color_space = JCS_RGB;
+
+  jpeg_set_defaults(&cinfo);
+  jpeg_set_quality(&cinfo, quality, TRUE);
+
+  jpeg_start_compress(&cinfo, TRUE);
+
+  JSAMPROW row_pointer[1];
+  while (cinfo.next_scanline < cinfo.image_height) {
+    row_pointer[0] = &rgb_data[cinfo.next_scanline * rgb_row_bytes];
+    jpeg_write_scanlines(&cinfo, row_pointer, 1);
+  }
+
+  jpeg_finish_compress(&cinfo);
+  jpeg_destroy_compress(&cinfo);
+
+  fclose(outfile);
+  g_free(rgb_data);
+
+  GST_DEBUG("Frame saved successfully: %s", filename);
+  g_free(filename);
+
+  return TRUE;
+}
+
+// =============================================================================
 // Landmark Processing Functions
 // =============================================================================
 
@@ -1526,10 +1760,13 @@ appsink_new_sample_callback(GstElement *appsink, gpointer user_data)
   for (l_frame = batch_meta->frame_meta_list; l_frame != NULL; l_frame = l_frame->next) {
     NvDsFrameMeta *frame_meta = (NvDsFrameMeta *)(l_frame->data);
     
-    // get source id
-    // guint source_id = frame_meta->source_id;
-    // GST_INFO("Processing frame number %u from source ID %u", frame_meta->frame_num, source_id);
-    //TODO: save frame jpg image to disk
+    // Save frame to disk if enabled
+    if (ENABLE_FRAME_SAVE && surface_valid && FRAME_SAVE_DIR) {
+      //if (frame_meta->frame_num % FRAME_SAVE_INTERVAL == 0) {
+        save_frame_to_jpeg(surface, frame_meta->source_id, frame_meta->frame_num,
+                          FRAME_SAVE_DIR, FRAME_SAVE_QUALITY);
+      //}
+    }
     
     // Process each object in frame
     NvDsMetaList *l_obj = NULL;
@@ -1577,6 +1814,21 @@ main(gint argc, char *argv[])
   if (!INFER_CONFIG) {
     g_printerr("ERROR - Config infer not found\n");
     return -1;
+  }
+
+  // Initialize frame save directory if enabled
+  if (ENABLE_FRAME_SAVE) {
+    if (!FRAME_SAVE_DIR) {
+      FRAME_SAVE_DIR = g_strdup("./outputs/frames");
+    }
+    
+    if (!ensure_frame_save_directory(FRAME_SAVE_DIR)) {
+      g_printerr("ERROR - Failed to create frame save directory: %s\n", FRAME_SAVE_DIR);
+      return -1;
+    }
+    
+    GST_INFO("Frame saving enabled: dir=%s, quality=%u", 
+            FRAME_SAVE_DIR, FRAME_SAVE_QUALITY);
   }
 
   gint current_device = -1;
@@ -1759,6 +2011,10 @@ main(gint argc, char *argv[])
     GST_DEBUG("KAFKA_QUALITY_IMPROVEMENT_THRESHOLD: %.2f", KAFKA_QUALITY_IMPROVEMENT_THRESHOLD);
   }
   GST_DEBUG("ENABLE_CROP_IMAGE: %s", ENABLE_CROP_IMAGE ? "TRUE" : "FALSE");
+  if (ENABLE_FRAME_SAVE) {
+    GST_DEBUG("FRAME_SAVE_DIR: %s", FRAME_SAVE_DIR);
+    GST_DEBUG("FRAME_SAVE_QUALITY: %u", FRAME_SAVE_QUALITY);
+  }
   GST_DEBUG("\n");
 
   GstCaps *caps = gst_caps_from_string("video/x-raw(memory:NVMM), format=RGBA");
@@ -1800,6 +2056,7 @@ main(gint argc, char *argv[])
   }
 
   // Link display branch (conditional)
+ 
   if (!DISABLE_DISPLAY) {
      // Link: tee -> queue_display -> nvosd -> nvsink
     if (!gst_element_link_many(tee, queue_display, nvosd, nvsink, NULL)) {
@@ -1886,6 +2143,10 @@ main(gint argc, char *argv[])
 
   if (KAFKA_TOPIC) {
     g_free(KAFKA_TOPIC);
+  }
+
+  if (FRAME_SAVE_DIR) {
+    g_free(FRAME_SAVE_DIR);
   }
 
   gst_object_unref(GST_OBJECT(pipeline));

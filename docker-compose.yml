@@ -42,7 +42,8 @@ services:
       - ./deepstream.c:/app/DeepStream-Yolo-Face/deepstream.c:ro
       - ./Makefile:/app/DeepStream-Yolo-Face/Makefile:ro
       - ./config_infer_primary_yoloV8_face.txt:/app/DeepStream-Yolo-Face/config_infer_primary_yoloV8_face.txt:ro
-      - ./tests:/app/DeepStream-Yolo-Face/tests:ro
+      - ./tests:/app/DeepStream-Yolo-Face/tests
+      - ./outputs:/app/DeepStream-Yolo-Face/outputs
     
     # Use network instead of host mode to enable Kafka communication
     networks:
