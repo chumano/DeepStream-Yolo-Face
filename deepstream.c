@@ -1163,8 +1163,6 @@ set_custom_bbox(NvDsObjectMeta *obj_meta)
 static void
 process_face_from_meta(NvDsBatchMeta *batch_meta, NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta, NvBufSurface *surface)
 {
-  NvDsDisplayMeta *display_meta = NULL;
-
   guint num_joints = obj_meta->mask_params.size / (sizeof(float) * 3);
 
   gfloat gain = MIN((gfloat) obj_meta->mask_params.width / STREAMMUX_WIDTH, (gfloat) obj_meta->mask_params.height /
@@ -1190,30 +1188,6 @@ process_face_from_meta(NvDsBatchMeta *batch_meta, NvDsFrameMeta *frame_meta, NvD
       landmarks[i].y = yc;
       landmarks[i].confidence = confidence;
     }
-
-    if (confidence < 0.5) {
-      continue;
-    }
-
-    if (!display_meta || display_meta->num_circles == MAX_ELEMENTS_IN_DISPLAY_META) {
-      display_meta = nvds_acquire_display_meta_from_pool(batch_meta);
-      nvds_add_display_meta_to_frame(frame_meta, display_meta);
-    }
-
-    NvOSD_CircleParams *circle_params = &display_meta->circle_params[display_meta->num_circles];
-    circle_params->xc = (guint) MIN(STREAMMUX_WIDTH - 1, MAX(0, xc));
-    circle_params->yc = (guint) MIN(STREAMMUX_HEIGHT - 1, MAX(0, yc));
-    circle_params->radius = 6;
-    circle_params->circle_color.red = 1.0;
-    circle_params->circle_color.green = 1.0;
-    circle_params->circle_color.blue = 1.0;
-    circle_params->circle_color.alpha = 1.0;
-    circle_params->has_bg_color = 1;
-    circle_params->bg_color.red = 0.0;
-    circle_params->bg_color.green = 0.0;
-    circle_params->bg_color.blue = 1.0;
-    circle_params->bg_color.alpha = 1.0;
-    display_meta->num_circles++;
   }
 
   // Assess face quality and send to Kafka if enabled
@@ -1237,10 +1211,6 @@ process_face_from_meta(NvDsBatchMeta *batch_meta, NvDsFrameMeta *frame_meta, NvD
     g_free(landmarks);
   }
 
-  g_free(obj_meta->mask_params.data);
-  obj_meta->mask_params.width = 0;
-  obj_meta->mask_params.height = 0;
-  obj_meta->mask_params.size = 0;
 }
 
 static GstPadProbeReturn
@@ -1276,16 +1246,64 @@ nvosd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_da
     surface = NULL;
   }
 
-  // each frame in batch
+  // Process each frame in batch
   NvDsMetaList *l_frame = NULL;
   for (l_frame = batch_meta->frame_meta_list; l_frame != NULL; l_frame = l_frame->next) {
     NvDsFrameMeta *frame_meta = (NvDsFrameMeta *) (l_frame->data);
+
+    NvDsDisplayMeta *display_meta = NULL;
 
     NvDsMetaList *l_obj = NULL;
     for (l_obj = frame_meta->obj_meta_list; l_obj != NULL; l_obj = l_obj->next) {
       NvDsObjectMeta *obj_meta = (NvDsObjectMeta *) (l_obj->data);
 
       set_custom_bbox(obj_meta);
+
+      // Draw landmarks (circles) if available
+      if (obj_meta->mask_params.data && obj_meta->mask_params.size > 0) {
+        guint num_joints = obj_meta->mask_params.size / (sizeof(float) * 3);
+        
+        gfloat gain = MIN((gfloat) obj_meta->mask_params.width / STREAMMUX_WIDTH, 
+                          (gfloat) obj_meta->mask_params.height / STREAMMUX_HEIGHT);
+        gfloat pad_x = (obj_meta->mask_params.width - STREAMMUX_WIDTH * gain) * 0.5f;
+        gfloat pad_y = (obj_meta->mask_params.height - STREAMMUX_HEIGHT * gain) * 0.5f;
+
+        for (guint i = 0; i < num_joints; ++i) {
+          gfloat xc = (obj_meta->mask_params.data[i * 3 + 0] - pad_x) / gain;
+          gfloat yc = (obj_meta->mask_params.data[i * 3 + 1] - pad_y) / gain;
+          gfloat confidence = obj_meta->mask_params.data[i * 3 + 2];
+
+          if (confidence < 0.5) {
+            continue;
+          }
+
+          if (!display_meta || display_meta->num_circles == MAX_ELEMENTS_IN_DISPLAY_META) {
+            display_meta = nvds_acquire_display_meta_from_pool(batch_meta);
+            nvds_add_display_meta_to_frame(frame_meta, display_meta);
+          }
+
+          NvOSD_CircleParams *circle_params = &display_meta->circle_params[display_meta->num_circles];
+          circle_params->xc = (guint) MIN(STREAMMUX_WIDTH - 1, MAX(0, xc));
+          circle_params->yc = (guint) MIN(STREAMMUX_HEIGHT - 1, MAX(0, yc));
+          circle_params->radius = 6;
+          circle_params->circle_color.red = 1.0;
+          circle_params->circle_color.green = 1.0;
+          circle_params->circle_color.blue = 1.0;
+          circle_params->circle_color.alpha = 1.0;
+          circle_params->has_bg_color = 1;
+          circle_params->bg_color.red = 0.0;
+          circle_params->bg_color.green = 0.0;
+          circle_params->bg_color.blue = 1.0;
+          circle_params->bg_color.alpha = 1.0;
+          display_meta->num_circles++;
+        }
+
+        // Free mask_params after drawing
+        g_free(obj_meta->mask_params.data);
+        obj_meta->mask_params.width = 0;
+        obj_meta->mask_params.height = 0;
+        obj_meta->mask_params.size = 0;
+      }
     }
   }
   
