@@ -25,11 +25,6 @@ GOptionEntry entries[] = {
   {NULL}
 };
 
-static int MAX_DISPLAY_LEN = 128;
-static int NTP_TEXT_X_OFFSET = 30;
-static int NTP_TEXT_Y_OFFSET = 30;
-static int NTP_TEXT_FONT_SIZE = 20;
-
 // =============================================================================
 // Utility Functions
 // =============================================================================
@@ -1364,10 +1359,9 @@ build_detection_json(FaceContext *ctx)
   g_string_append_printf(json, "\"frame_size\":{\"width\":%d,\"height\":%d},",
                          STREAMMUX_WIDTH, STREAMMUX_HEIGHT);
   g_string_append_printf(json, "\"frame_number\":%u,", ctx->frame_num);
-  g_string_append_printf(json, "\"source_id\":%u,", ctx->source_id);
 
   // Bounding boxes
-  g_string_append_printf(json, "\"bbox\":{\"left\":%.2u,\"top\":%.2u,\"width\":%.2u,\"height\":%.2u},",
+  g_string_append_printf(json, "\"bbox\":{\"left\":%u,\"top\":%u,\"width\":%u,\"height\":%u},",
                          bbox->left, bbox->top,
                          bbox->width, bbox->height);
   g_string_append_printf(json, "\"crop_bbox\":{\"left\":%u,\"top\":%u,\"width\":%u,\"height\":%u},",

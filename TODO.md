@@ -12,9 +12,9 @@
 ### C
 - run c program
 - [x] get timestamp from frame metadata
-- save frame images with bounding boxes
-  - save image to file
-  - send metadata to Kafka (include image path)
+- [x] save frame images with bounding boxes
+  - [x] save image to file
+  - [x] send metadata to Kafka (include image path)
 
 ## Consumer applications
 - storage to Qdrant

@@ -519,12 +519,19 @@ class FaceDetectionConsumer:
     
     def _create_consumer(self) -> KafkaConsumer:
         """Create and configure Kafka consumer."""
+        def safe_deserializer(x):
+            try:
+                return json.loads(x.decode('utf-8'))
+            except Exception as e:
+                logger.error(f"Failed to deserialize message: {e}")
+                logger.error(f"Raw message: {x!r}")
+                return {"_raw_message": x, "_error": str(e)}
         return KafkaConsumer(
             self.config.kafka_topic,
             bootstrap_servers=self.config.kafka_bootstrap_servers,
             auto_offset_reset=self.config.kafka_offset_reset,
             enable_auto_commit=True,
-            value_deserializer=lambda x: json.loads(x.decode('utf-8'))
+            value_deserializer=safe_deserializer
         )
     
     def _cleanup_output_dir(self) -> None:
@@ -583,7 +590,17 @@ class FaceDetectionConsumer:
         """Process a single message."""
         self.message_count += 1
         detection = message.value
-        
+
+        # Handle deserialization errors and show raw message
+        if isinstance(detection, dict) and "_raw_message" in detection:
+            logger.error("⚠️ Message could not be deserialized as JSON.")
+            logger.error(f"Raw message: {detection['_raw_message']!r}")
+            logger.error(f"Deserialization error: {detection.get('_error')}")
+            # exit program
+            print("\nExiting due to deserialization error.")
+            sys.exit(1)
+            return
+
         self.printer.print_detection(detection, message.partition, message.offset)
         
         # Save raw face image

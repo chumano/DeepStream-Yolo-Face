@@ -57,6 +57,11 @@ static gboolean ENABLE_FRAME_SAVE = TRUE;
 static gchar *FRAME_SAVE_DIR = NULL;
 static guint FRAME_SAVE_QUALITY = 70; // JPEG quality (0-100)
 
+static int MAX_DISPLAY_LEN = 128;
+static int NTP_TEXT_X_OFFSET = 30;
+static int NTP_TEXT_Y_OFFSET = 30;
+static int NTP_TEXT_FONT_SIZE = 20;
+
 // =============================================================================
 // Detection Manager Structures
 // =============================================================================
