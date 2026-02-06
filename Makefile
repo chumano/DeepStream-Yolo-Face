@@ -52,15 +52,18 @@ all: $(APP)
 $(APP): $(OBJS) Makefile
 	$(CC) -o $(APP) $(OBJS) $(LIBS)
 
-clean:
+clean: clean_images
 	rm -rf $(OBJS) $(APP)
 
-run: $(APP)
+clean_images:
+	rm ./outputs/frames/*
+
+run: clean_images $(APP)
 	GST_DEBUG=deepstream:4 ./$(APP) -s file:///app/videos/faces_tracking.mp4  \
 	   	-c config_infer_primary_yoloV8_face.txt  \
 		--kafka-broker kafka:29092  --kafka-topic face-detections
 
-.PHONY: all clean help
+.PHONY: all clean help clean_images
 
 help:
 	@echo "DeepStream Face Detection Application"

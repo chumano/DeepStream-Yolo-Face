@@ -11,9 +11,10 @@
 
 ### C
 - run c program
-
-### C++
-cp deepstream.c deepstream.cpp & make KAFKA=1
+- [x] get timestamp from frame metadata
+- save frame images with bounding boxes
+  - save image to file
+  - send metadata to Kafka (include image path)
 
 ## Consumer applications
 - storage to Qdrant

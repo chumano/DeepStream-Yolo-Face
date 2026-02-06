@@ -31,6 +31,8 @@ python3 deepstream.py -s "rtsp://admin:dt%4012345@192.168.1.203:554/cam/realmoni
 
 ##################
 # or C app
+rm outputs/frames/*
+
 ./deepstream \
     -s file:///app/videos/friends_short.mp4 \
     -c config_infer_primary_yoloV8_face.txt
@@ -50,7 +52,7 @@ python3 deepstream.py -s "rtsp://admin:dt%4012345@192.168.1.203:554/cam/realmoni
   -s file:///app/videos/friends.mp4 \
     -c config_infer_primary_yoloV8_face.txt \
     --kafka-broker kafka:29092 \
-    --kafka-topic face-detections --disable-crop-image
+    --kafka-topic face-detections --disable-display --disable-crop-image
 
 GST LOG LEVEL
 https://gstreamer.freedesktop.org/documentation/tutorials/basic/debugging-tools.html?gi-language=c

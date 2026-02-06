@@ -26,6 +26,9 @@ GOptionEntry entries[] = {
 };
 
 static int MAX_DISPLAY_LEN = 128;
+static int NTP_TEXT_X_OFFSET = 30;
+static int NTP_TEXT_Y_OFFSET = 30;
+static int NTP_TEXT_FONT_SIZE = 20;
 
 // =============================================================================
 // Utility Functions
@@ -583,7 +586,7 @@ detection_manager_process_pending(DetectionManager *manager)
     detection_store_cleanup_stale_records(manager->store, &removed_sent, &removed_pending);
     
     if (removed_sent > 0 || removed_pending > 0) {
-      g_print("INFO - Cleanup: removed %u sent records, %u pending detections\n",
+      GST_INFO("INFO - Cleanup: removed %u sent records, %u pending detections\n",
               removed_sent, removed_pending);
       manager->stats.cleaned_sent += removed_sent;
       manager->stats.cleaned_pending += removed_pending;
@@ -1068,9 +1071,12 @@ ensure_frame_save_directory(const gchar *dir_path)
 }
 
 static gboolean
-save_frame_to_jpeg(NvBufSurface *surface, guint source_id, guint frame_num,
+save_frame_to_jpeg(NvBufSurface *surface, NvDsFrameMeta * frame_meta,
                    const gchar *output_dir, gint quality)
 {
+  guint source_id = frame_meta->source_id;
+  guint frame_num = frame_meta->frame_num;
+  gboolean infer_done = frame_meta->bInferDone;
   if (!surface || !output_dir) {
     GST_ERROR("Invalid parameters for save_frame_to_jpeg");
     return FALSE;
@@ -1091,8 +1097,8 @@ save_frame_to_jpeg(NvBufSurface *surface, guint source_id, guint frame_num,
   // Generate filename with timestamp
   GDateTime *now = g_date_time_new_now_local();
   gchar *timestamp = g_date_time_format(now, "%Y%m%d_%H%M%S");
-  gchar *filename = g_strdup_printf("%s/frame_src%u_num%u_%s.jpg",
-                                    output_dir, source_id, frame_num, timestamp);
+  gchar *filename = g_strdup_printf("%s/frame_src%u_num%u_%d_%s.jpg",
+                                    output_dir, source_id, frame_num,infer_done, timestamp);
   g_free(timestamp);
   g_date_time_unref(now);
 
@@ -1279,14 +1285,22 @@ save_frame_to_jpeg(NvBufSurface *surface, guint source_id, guint frame_num,
 static Landmark *
 extract_landmarks_from_object(NvDsObjectMeta *obj_meta, guint *num_landmarks_out)
 {
-  if (!obj_meta->mask_params.data || obj_meta->mask_params.size == 0) {
+  if (obj_meta->mask_params.size == 0) {
     *num_landmarks_out = 0;
+    GST_DEBUG("Landmark data size is zero");
+    return NULL;
+  }
+
+  if(!obj_meta->mask_params.data){
+    *num_landmarks_out = 0;
+    GST_DEBUG("Landmark data pointer is NULL");
     return NULL;
   }
 
   guint num_joints = obj_meta->mask_params.size / (sizeof(float) * 3);
   if (num_joints == 0) {
     *num_landmarks_out = 0;
+    GST_DEBUG("Landmark data size is zero");
     return NULL;
   }
 
@@ -1399,7 +1413,7 @@ process_face_detection(FaceContext *ctx)
 
   if (!assess_face_quality(ctx->landmarks, ctx->num_landmarks, 
                            &is_good_face, &quality_score, &metrics)) {
-    GST_DEBUG("Failed to assess face quality for object_id=%lu", ctx->obj_meta->object_id);
+    GST_WARNING("Failed to assess face quality for object_id=%lu", ctx->obj_meta->object_id);
     return;
   }
 
@@ -1433,7 +1447,6 @@ process_object(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta, NvBufSurface
   // Extract landmarks from object metadata
   guint num_landmarks = 0;
   Landmark *landmarks = extract_landmarks_from_object(obj_meta, &num_landmarks);
-
   if (!landmarks || num_landmarks < 5) {
     GST_DEBUG("Insufficient landmarks (%u) for object_id=%lu", 
               num_landmarks, obj_meta->object_id);
@@ -1530,7 +1543,6 @@ nvosd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_da
     NvDsFrameMeta *frame_meta = (NvDsFrameMeta *) (l_frame->data);
 
     NvDsDisplayMeta *display_meta = NULL;
-
     NvDsMetaList *l_obj = NULL;
     for (l_obj = frame_meta->obj_meta_list; l_obj != NULL; l_obj = l_obj->next) {
       NvDsObjectMeta *obj_meta = (NvDsObjectMeta *) (l_obj->data);
@@ -1575,13 +1587,48 @@ nvosd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_da
           circle_params->bg_color.alpha = 1.0;
           display_meta->num_circles++;
         }
-
-        // Free mask_params after drawing
-        g_free(obj_meta->mask_params.data);
-        obj_meta->mask_params.width = 0;
-        obj_meta->mask_params.height = 0;
-        obj_meta->mask_params.size = 0;
       }
+    }
+
+    // Add NTP timestamp overlay (once per frame)
+    if (frame_meta->ntp_timestamp) {
+      NvDsDisplayMeta *display_meta = nvds_acquire_display_meta_from_pool(batch_meta);
+      
+      // Convert NTP timestamp to human-readable format
+      gdouble timestamp_sec = (gdouble)frame_meta->ntp_timestamp / 1e9;
+      time_t timestamp_time = (time_t)timestamp_sec;
+      struct tm *tm_info = localtime(&timestamp_time);
+      
+      gchar timestamp_str[MAX_DISPLAY_LEN];
+      strftime(timestamp_str, sizeof(timestamp_str), "%Y-%m-%d %H:%M:%S", tm_info);
+      
+      // Add milliseconds
+      gint millisec = (gint)((timestamp_sec - (time_t)timestamp_sec) * 1000);
+      gchar full_timestamp[MAX_DISPLAY_LEN];
+      g_snprintf(full_timestamp, sizeof(full_timestamp), "FRAME %d, NTP: %s.%03d", frame_meta->frame_num, timestamp_str, millisec);
+      
+      // Configure text parameters
+      NvOSD_TextParams *txt_params = &display_meta->text_params[0];
+      display_meta->num_labels = 1;
+      
+      txt_params->display_text = g_strdup(full_timestamp);
+      txt_params->x_offset = NTP_TEXT_X_OFFSET;
+      txt_params->y_offset = NTP_TEXT_Y_OFFSET;
+      
+      txt_params->font_params.font_name = "Ubuntu";
+      txt_params->font_params.font_size = NTP_TEXT_FONT_SIZE;
+      txt_params->font_params.font_color.red = 1.0;
+      txt_params->font_params.font_color.green = 1.0;
+      txt_params->font_params.font_color.blue = 1.0;
+      txt_params->font_params.font_color.alpha = 1.0;
+      
+      txt_params->set_bg_clr = 1;
+      txt_params->text_bg_clr.red = 0.0;
+      txt_params->text_bg_clr.green = 0.0;
+      txt_params->text_bg_clr.blue = 0.0;
+      txt_params->text_bg_clr.alpha = 0.7;
+      
+      nvds_add_display_meta_to_frame(frame_meta, display_meta);
     }
   }
   
@@ -1759,12 +1806,25 @@ appsink_new_sample_callback(GstElement *appsink, gpointer user_data)
   NvDsMetaList *l_frame = NULL;
   for (l_frame = batch_meta->frame_meta_list; l_frame != NULL; l_frame = l_frame->next) {
     NvDsFrameMeta *frame_meta = (NvDsFrameMeta *)(l_frame->data);
-    
+
+    // check frame is infer done
+    if (frame_meta->bInferDone == FALSE) {
+      GST_DEBUG("Frame %d inference not done yet", frame_meta->frame_num);
+      continue;
+    }
+
+    GST_DEBUG("Processing frame %d with %d objects",
+              frame_meta->frame_num, frame_meta->num_obj_meta);
+
     // Save frame to disk if enabled
     if (ENABLE_FRAME_SAVE && surface_valid && FRAME_SAVE_DIR) {
+     
       //if (frame_meta->frame_num % FRAME_SAVE_INTERVAL == 0) {
-        save_frame_to_jpeg(surface, frame_meta->source_id, frame_meta->frame_num,
+      // Check if frame has any detected objects (faces)
+      if (frame_meta->obj_meta_list != NULL) {
+        save_frame_to_jpeg(surface, frame_meta,
                           FRAME_SAVE_DIR, FRAME_SAVE_QUALITY);
+      }
       //}
     }
     
@@ -1775,7 +1835,17 @@ appsink_new_sample_callback(GstElement *appsink, gpointer user_data)
       
       // Process face with surface parameter
       process_object(frame_meta, obj_meta, surface);
+
+      // Free mask_params sau khi đã xử lý xong
+      if (obj_meta->mask_params.data) {
+        g_free(obj_meta->mask_params.data);
+        obj_meta->mask_params.data = NULL;
+        obj_meta->mask_params.width = 0;
+        obj_meta->mask_params.height = 0;
+        obj_meta->mask_params.size = 0;
+      }
     }
+
   }
   
   // Cleanup
@@ -1833,6 +1903,7 @@ main(gint argc, char *argv[])
 
   gint current_device = -1;
   cudaGetDevice(&current_device);
+ 
   struct cudaDeviceProp prop;
   cudaGetDeviceProperties(&prop, current_device);
 
