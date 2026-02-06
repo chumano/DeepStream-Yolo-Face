@@ -61,6 +61,13 @@ static guint FRAME_SAVE_QUALITY = 70; // JPEG quality (0-100)
 // Detection Manager Structures
 // =============================================================================
 
+typedef struct {
+  guint left;
+  guint top;
+  guint width;
+  guint height;
+} CropBox;
+
 typedef struct _FaceQualityMetrics {
   gboolean is_frontal;
   guint visible_landmarks;
@@ -77,11 +84,23 @@ typedef struct _Landmark {
 } Landmark;
 
 typedef struct _FaceContext {
-  NvDsFrameMeta *frame_meta;
-  NvDsObjectMeta *obj_meta;
-  NvBufSurface *surface;
-  Landmark *landmarks;
+  guint source_id;
+  gdouble frame_timestamp;
+  guint frame_num;
+  guint64 object_id;
+  gint class_id;
+  gdouble confidence;
+
+  const Landmark *landmarks;
   guint num_landmarks;
+  const gchar* frame_image_path;
+
+  const CropBox* bbox;
+  const CropBox* crop_box;
+  gboolean is_good_face;
+  gdouble quality_score;
+  const FaceQualityMetrics *metrics;
+  const gchar *face_image_base64;
 } FaceContext;
 
 typedef struct _Detection {
