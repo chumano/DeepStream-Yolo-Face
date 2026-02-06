@@ -1476,7 +1476,7 @@ static void
 set_custom_bbox(NvDsObjectMeta *obj_meta)
 {
   guint border_width = 6;
-  guint font_size = 18;
+  guint font_size = 50;
 
   gfloat x_offset = obj_meta->rect_params.left - border_width * 0.5f;
   gfloat y_offset = obj_meta->rect_params.top - font_size * 2 + border_width * 0.5f + 1;
@@ -1542,6 +1542,53 @@ nvosd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_da
   for (l_frame = batch_meta->frame_meta_list; l_frame != NULL; l_frame = l_frame->next) {
     NvDsFrameMeta *frame_meta = (NvDsFrameMeta *) (l_frame->data);
 
+
+    // Add NTP timestamp overlay (once per frame)
+    if (frame_meta->ntp_timestamp) {
+      NvDsDisplayMeta *display_meta = nvds_acquire_display_meta_from_pool(batch_meta);
+      
+      // Convert NTP timestamp to human-readable format
+      gdouble timestamp_sec = (gdouble)frame_meta->ntp_timestamp / 1e9;
+      time_t timestamp_time = (time_t)timestamp_sec;
+      struct tm *tm_info = localtime(&timestamp_time);
+      
+      gchar timestamp_str[MAX_DISPLAY_LEN];
+      strftime(timestamp_str, sizeof(timestamp_str), "%Y-%m-%d %H:%M:%S", tm_info);
+      
+      // Add milliseconds
+      gint millisec = (gint)((timestamp_sec - (time_t)timestamp_sec) * 1000);
+      gchar full_timestamp[MAX_DISPLAY_LEN];
+      g_snprintf(full_timestamp, sizeof(full_timestamp), "FRAME %d, NTP: %s.%03d", frame_meta->frame_num, timestamp_str, millisec);
+      
+      // Configure text parameters
+      NvOSD_TextParams *txt_params = &display_meta->text_params[0];
+      display_meta->num_labels = 1;
+      
+      txt_params->display_text = g_strdup(full_timestamp);
+      txt_params->x_offset = NTP_TEXT_X_OFFSET;
+      txt_params->y_offset = NTP_TEXT_Y_OFFSET;
+      
+      txt_params->font_params.font_name = "Ubuntu";
+      txt_params->font_params.font_size = NTP_TEXT_FONT_SIZE;
+      txt_params->font_params.font_color.red = 1.0;
+      txt_params->font_params.font_color.green = 1.0;
+      txt_params->font_params.font_color.blue = 1.0;
+      txt_params->font_params.font_color.alpha = 1.0;
+      
+      txt_params->set_bg_clr = 1;
+      txt_params->text_bg_clr.red = 0.0;
+      txt_params->text_bg_clr.green = 0.0;
+      txt_params->text_bg_clr.blue = 0.0;
+      txt_params->text_bg_clr.alpha = 0.7;
+      
+      nvds_add_display_meta_to_frame(frame_meta, display_meta);
+    }
+
+    // Only draw if inference was done on this frame
+    if (!frame_meta->bInferDone) {
+      continue;
+    }
+
     NvDsDisplayMeta *display_meta = NULL;
     NvDsMetaList *l_obj = NULL;
     for (l_obj = frame_meta->obj_meta_list; l_obj != NULL; l_obj = l_obj->next) {
@@ -1590,46 +1637,6 @@ nvosd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_da
       }
     }
 
-    // Add NTP timestamp overlay (once per frame)
-    if (frame_meta->ntp_timestamp) {
-      NvDsDisplayMeta *display_meta = nvds_acquire_display_meta_from_pool(batch_meta);
-      
-      // Convert NTP timestamp to human-readable format
-      gdouble timestamp_sec = (gdouble)frame_meta->ntp_timestamp / 1e9;
-      time_t timestamp_time = (time_t)timestamp_sec;
-      struct tm *tm_info = localtime(&timestamp_time);
-      
-      gchar timestamp_str[MAX_DISPLAY_LEN];
-      strftime(timestamp_str, sizeof(timestamp_str), "%Y-%m-%d %H:%M:%S", tm_info);
-      
-      // Add milliseconds
-      gint millisec = (gint)((timestamp_sec - (time_t)timestamp_sec) * 1000);
-      gchar full_timestamp[MAX_DISPLAY_LEN];
-      g_snprintf(full_timestamp, sizeof(full_timestamp), "FRAME %d, NTP: %s.%03d", frame_meta->frame_num, timestamp_str, millisec);
-      
-      // Configure text parameters
-      NvOSD_TextParams *txt_params = &display_meta->text_params[0];
-      display_meta->num_labels = 1;
-      
-      txt_params->display_text = g_strdup(full_timestamp);
-      txt_params->x_offset = NTP_TEXT_X_OFFSET;
-      txt_params->y_offset = NTP_TEXT_Y_OFFSET;
-      
-      txt_params->font_params.font_name = "Ubuntu";
-      txt_params->font_params.font_size = NTP_TEXT_FONT_SIZE;
-      txt_params->font_params.font_color.red = 1.0;
-      txt_params->font_params.font_color.green = 1.0;
-      txt_params->font_params.font_color.blue = 1.0;
-      txt_params->font_params.font_color.alpha = 1.0;
-      
-      txt_params->set_bg_clr = 1;
-      txt_params->text_bg_clr.red = 0.0;
-      txt_params->text_bg_clr.green = 0.0;
-      txt_params->text_bg_clr.blue = 0.0;
-      txt_params->text_bg_clr.alpha = 0.7;
-      
-      nvds_add_display_meta_to_frame(frame_meta, display_meta);
-    }
   }
   
   gst_buffer_unmap(buf, &map_info);
