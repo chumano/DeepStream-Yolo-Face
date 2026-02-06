@@ -1070,50 +1070,98 @@ ensure_frame_save_directory(const gchar *dir_path)
   return TRUE;
 }
 
-static gboolean
-save_frame_to_jpeg(NvBufSurface *surface, NvDsFrameMeta * frame_meta,
-                   const gchar *output_dir, gint quality)
+
+// Saves a frame as JPEG into:
+//   <base_output_dir>/source_<source_id>/frame_....jpg
+//
+// Returns (on success):
+//   "source_<source_id>/frame_....jpg"   <-- RELATIVE PATH
+//
+// Returns NULL on failure
+//
+// Caller MUST g_free() the returned string
+
+static gchar *
+save_frame_to_jpeg(NvBufSurface *surface,
+                   NvDsFrameMeta *frame_meta,
+                   const gchar *base_output_dir,
+                   gint quality)
 {
-  guint source_id = frame_meta->source_id;
-  guint frame_num = frame_meta->frame_num;
-  gboolean infer_done = frame_meta->bInferDone;
-  if (!surface || !output_dir) {
+  /* ----------------------------------------------------
+   * Basic validation
+   * -------------------------------------------------- */
+  if (!surface || !frame_meta || !base_output_dir) {
     GST_ERROR("Invalid parameters for save_frame_to_jpeg");
-    return FALSE;
+    return NULL;
   }
 
   if (surface->numFilled < 1 || !surface->surfaceList) {
-    GST_ERROR("Surface has no data to save");
-    return FALSE;
+    GST_ERROR("Surface has no data");
+    return NULL;
   }
 
-  NvBufSurfaceParams *surf_params = &surface->surfaceList[0];
-  
-  if (surf_params->width == 0 || surf_params->height == 0) {
-    GST_ERROR("Surface has invalid dimensions");
-    return FALSE;
+  guint batch_id = frame_meta->batch_id;
+  NvBufSurfaceParams *src_params = &surface->surfaceList[batch_id];
+  if (src_params->width == 0 || src_params->height == 0) {
+    GST_ERROR("Invalid surface dimensions");
+    return NULL;
   }
 
-  // Generate filename with timestamp
+  guint source_id   = frame_meta->source_id;
+  guint frame_num   = frame_meta->frame_num;
+  gboolean infer_ok = frame_meta->bInferDone;
+
+  /* ----------------------------------------------------
+   * Build per-source directories
+   * -------------------------------------------------- */
+  gchar *rel_dir = g_strdup_printf("source_%u", source_id);
+  gchar *abs_dir = g_strdup_printf("%s/%s", base_output_dir, rel_dir);
+
+  if (!ensure_frame_save_directory(abs_dir)) {
+    GST_ERROR("Failed to create directory: %s", abs_dir);
+    g_free(rel_dir);
+    g_free(abs_dir);
+    return NULL;
+  }
+
+  /* ----------------------------------------------------
+   * Filename
+   * -------------------------------------------------- */
   GDateTime *now = g_date_time_new_now_local();
   gchar *timestamp = g_date_time_format(now, "%Y%m%d_%H%M%S");
-  gchar *filename = g_strdup_printf("%s/frame_src%u_num%u_%d_%s.jpg",
-                                    output_dir, source_id, frame_num,infer_done, timestamp);
-  g_free(timestamp);
   g_date_time_unref(now);
 
-  GST_DEBUG("Saving frame to: %s", filename);
+  gchar *filename = g_strdup_printf(
+      "frame_src%u_num%u_%d_%s.jpg",
+      source_id, frame_num, infer_ok, timestamp);
 
-  // Create destination surface for RGB conversion
+  g_free(timestamp);
+
+  /* ----------------------------------------------------
+   * Relative + Absolute paths
+   * -------------------------------------------------- */
+  gchar *relative_path = g_strdup_printf("%s/%s", rel_dir, filename);
+  gchar *absolute_path = g_strdup_printf("%s/%s", abs_dir, filename);
+
+  g_free(rel_dir);
+  g_free(abs_dir);
+  g_free(filename);
+
+  GST_DEBUG("Saving frame to: %s", absolute_path);
+
+  /* ----------------------------------------------------
+   * Create RGBA destination surface
+   * -------------------------------------------------- */
   NvBufSurface *dst_surface = NULL;
   NvBufSurfaceCreateParams create_params = {0};
+
   create_params.gpuId = surface->gpuId;
-  create_params.width = surf_params->width;
-  create_params.height = surf_params->height;
-  create_params.size = 0;
+  create_params.width = src_params->width;
+  create_params.height = src_params->height;
   create_params.isContiguous = 1;
   create_params.colorFormat = NVBUF_COLOR_FORMAT_RGBA;
   create_params.layout = NVBUF_LAYOUT_PITCH;
+
 #ifdef __aarch64__
   create_params.memType = NVBUF_MEM_DEFAULT;
 #else
@@ -1122,11 +1170,14 @@ save_frame_to_jpeg(NvBufSurface *surface, NvDsFrameMeta * frame_meta,
 
   if (NvBufSurfaceCreate(&dst_surface, 1, &create_params) != 0) {
     GST_ERROR("Failed to create destination surface");
-    g_free(filename);
-    return FALSE;
+    g_free(relative_path);
+    g_free(absolute_path);
+    return NULL;
   }
 
-  // Setup transform parameters for color conversion
+  /* ----------------------------------------------------
+   * GPU color conversion
+   * -------------------------------------------------- */
   NvBufSurfTransformParams transform_params = {0};
   transform_params.transform_flag = NVBUFSURF_TRANSFORM_FILTER;
   transform_params.transform_filter = NvBufSurfTransformInter_Default;
@@ -1136,111 +1187,84 @@ save_frame_to_jpeg(NvBufSurface *surface, NvDsFrameMeta * frame_meta,
   config_params.gpu_id = surface->gpuId;
   config_params.cuda_stream = NULL;
 
-  if (NvBufSurfTransformSetSessionParams(&config_params) != 0) {
-    GST_ERROR("Failed to set transform session params");
+  if (NvBufSurfTransformSetSessionParams(&config_params) != 0 ||
+      NvBufSurfTransform(surface, dst_surface, &transform_params) !=
+          NvBufSurfTransformError_Success) {
+    GST_ERROR("NvBufSurfTransform failed");
     NvBufSurfaceDestroy(dst_surface);
-    g_free(filename);
-    return FALSE;
+    g_free(relative_path);
+    g_free(absolute_path);
+    return NULL;
   }
 
-  if (NvBufSurfTransform(surface, dst_surface, &transform_params) != NvBufSurfTransformError_Success) {
-    GST_ERROR("Failed to transform surface");
-    NvBufSurfaceDestroy(dst_surface);
-    g_free(filename);
-    return FALSE;
-  }
-
-  // Synchronize CUDA operations
+  /* Ensure GPU work is complete */
   cudaStreamSynchronize(0);
 
+  /* ----------------------------------------------------
+   * Copy RGBA data to CPU
+   * -------------------------------------------------- */
   NvBufSurfaceParams *dst_params = &dst_surface->surfaceList[0];
-  guint width = dst_params->width;
+  guint width  = dst_params->width;
   guint height = dst_params->height;
-  guint pitch = dst_params->pitch;
+  guint pitch  = dst_params->pitch;
 
-  // Allocate CPU buffer
   guint buffer_size = pitch * height;
-  guchar *cpu_buffer = (guchar *)g_malloc(buffer_size);
+  guchar *cpu_buffer = g_malloc(buffer_size);
   if (!cpu_buffer) {
     GST_ERROR("Failed to allocate CPU buffer");
     NvBufSurfaceDestroy(dst_surface);
-    g_free(filename);
-    return FALSE;
+    g_free(relative_path);
+    g_free(absolute_path);
+    return NULL;
   }
 
-  // Copy data to CPU
-  gboolean data_copied = FALSE;
-  
-  if (dst_surface->memType == NVBUF_MEM_CUDA_UNIFIED && dst_params->dataPtr) {
-    cudaError_t cuda_err = cudaMemcpy(cpu_buffer, dst_params->dataPtr, buffer_size, cudaMemcpyDeviceToHost);
-    if (cuda_err == cudaSuccess) {
-      data_copied = TRUE;
-    } else {
-      cudaDeviceSynchronize();
-      memcpy(cpu_buffer, dst_params->dataPtr, buffer_size);
-      data_copied = TRUE;
-    }
-  }
-
-  if (!data_copied) {
-    if (NvBufSurfaceMap(dst_surface, 0, 0, NVBUF_MAP_READ) == 0) {
-      NvBufSurfaceSyncForCpu(dst_surface, 0, 0);
-      guchar *mapped_data = dst_params->mappedAddr.addr[0] ? 
-                           (guchar *)dst_params->mappedAddr.addr[0] : 
-                           (guchar *)dst_params->dataPtr;
-      if (mapped_data) {
-        memcpy(cpu_buffer, mapped_data, buffer_size);
-        data_copied = TRUE;
-      }
-      NvBufSurfaceUnMap(dst_surface, 0, 0);
-    }
-  }
-
-  if (!data_copied && dst_params->dataPtr) {
-    cudaError_t cuda_err = cudaMemcpy(cpu_buffer, dst_params->dataPtr, buffer_size, cudaMemcpyDeviceToHost);
-    if (cuda_err == cudaSuccess) {
-      data_copied = TRUE;
-    }
+  cudaError_t err = cudaMemcpy(cpu_buffer, dst_params->dataPtr, 
+                                buffer_size, cudaMemcpyDeviceToHost);
+  if (err != cudaSuccess) {
+    GST_ERROR("cudaMemcpy failed: %s", cudaGetErrorString(err));
+    g_free(cpu_buffer);
+    NvBufSurfaceDestroy(dst_surface);
+    g_free(relative_path);
+    g_free(absolute_path);
+    return NULL;
   }
 
   NvBufSurfaceDestroy(dst_surface);
 
-  if (!data_copied) {
-    GST_ERROR("Failed to copy surface data to CPU");
-    g_free(cpu_buffer);
-    g_free(filename);
-    return FALSE;
-  }
-
-  // Convert RGBA to RGB
-  guint rgb_row_bytes = width * 3;
-  guchar *rgb_data = (guchar *)g_malloc(rgb_row_bytes * height);
+  /* ----------------------------------------------------
+   * RGBA → RGB
+   * -------------------------------------------------- */
+  guint rgb_stride = width * 3;
+  guchar *rgb_data = g_malloc(rgb_stride * height);
   if (!rgb_data) {
-    GST_ERROR("Failed to allocate RGB buffer");
     g_free(cpu_buffer);
-    g_free(filename);
-    return FALSE;
+    g_free(relative_path);
+    g_free(absolute_path);
+    return NULL;
   }
 
   for (guint y = 0; y < height; y++) {
-    guchar *src_row = cpu_buffer + y * pitch;
-    guchar *dst_row = rgb_data + y * rgb_row_bytes;
+    guchar *src = cpu_buffer + y * pitch;
+    guchar *dst = rgb_data + y * rgb_stride;
     for (guint x = 0; x < width; x++) {
-      dst_row[x * 3 + 0] = src_row[x * 4 + 0];  // R
-      dst_row[x * 3 + 1] = src_row[x * 4 + 1];  // G
-      dst_row[x * 3 + 2] = src_row[x * 4 + 2];  // B
+      dst[x * 3 + 0] = src[x * 4 + 0];
+      dst[x * 3 + 1] = src[x * 4 + 1];
+      dst[x * 3 + 2] = src[x * 4 + 2];
     }
   }
-  
+
   g_free(cpu_buffer);
 
-  // Encode to JPEG and save to file
-  FILE *outfile = fopen(filename, "wb");
+  /* ----------------------------------------------------
+   * JPEG encode
+   * -------------------------------------------------- */
+  FILE *outfile = fopen(absolute_path, "wb");
   if (!outfile) {
-    GST_ERROR("Failed to open file for writing: %s", filename);
+    GST_ERROR("Failed to open file: %s", absolute_path);
     g_free(rgb_data);
-    g_free(filename);
-    return FALSE;
+    g_free(relative_path);
+    g_free(absolute_path);
+    return NULL;
   }
 
   struct jpeg_compress_struct cinfo;
@@ -1257,26 +1281,27 @@ save_frame_to_jpeg(NvBufSurface *surface, NvDsFrameMeta * frame_meta,
 
   jpeg_set_defaults(&cinfo);
   jpeg_set_quality(&cinfo, quality, TRUE);
-
   jpeg_start_compress(&cinfo, TRUE);
 
-  JSAMPROW row_pointer[1];
+  JSAMPROW row[1];
   while (cinfo.next_scanline < cinfo.image_height) {
-    row_pointer[0] = &rgb_data[cinfo.next_scanline * rgb_row_bytes];
-    jpeg_write_scanlines(&cinfo, row_pointer, 1);
+    row[0] = &rgb_data[cinfo.next_scanline * rgb_stride];
+    jpeg_write_scanlines(&cinfo, row, 1);
   }
 
   jpeg_finish_compress(&cinfo);
   jpeg_destroy_compress(&cinfo);
-
   fclose(outfile);
+
   g_free(rgb_data);
+  g_free(absolute_path);
 
-  GST_DEBUG("Frame saved successfully: %s", filename);
-  g_free(filename);
-
-  return TRUE;
+  /* ----------------------------------------------------
+   * SUCCESS → return RELATIVE path
+   * -------------------------------------------------- */
+  return relative_path;   // caller must g_free()
 }
+
 
 // =============================================================================
 // Landmark Processing Functions
@@ -1823,14 +1848,18 @@ appsink_new_sample_callback(GstElement *appsink, gpointer user_data)
     GST_DEBUG("Processing frame %d with %d objects",
               frame_meta->frame_num, frame_meta->num_obj_meta);
 
+    gchar *image_rel_path = NULL;
     // Save frame to disk if enabled
     if (ENABLE_FRAME_SAVE && surface_valid && FRAME_SAVE_DIR) {
      
       //if (frame_meta->frame_num % FRAME_SAVE_INTERVAL == 0) {
       // Check if frame has any detected objects (faces)
       if (frame_meta->obj_meta_list != NULL) {
-        save_frame_to_jpeg(surface, frame_meta,
+        image_rel_path = save_frame_to_jpeg(surface, frame_meta,
                           FRAME_SAVE_DIR, FRAME_SAVE_QUALITY);
+        GST_INFO("Saved frame %d to %s",
+                  frame_meta->frame_num,
+                  image_rel_path ? image_rel_path : "NULL");
       }
       //}
     }
@@ -1851,6 +1880,10 @@ appsink_new_sample_callback(GstElement *appsink, gpointer user_data)
         obj_meta->mask_params.height = 0;
         obj_meta->mask_params.size = 0;
       }
+    }
+
+    if(image_rel_path) {
+      g_free(image_rel_path);
     }
 
   }
