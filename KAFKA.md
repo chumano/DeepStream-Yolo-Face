@@ -93,6 +93,7 @@ Each detection message contains:
 {
   "timestamp": 1706659200.123,
   "object_id": 42,
+  "source_id": 0,
   "class_id": 0,
   "confidence": 0.95,
   "frame_size": { "width": 1920, "height": 1080 },

@@ -48,6 +48,14 @@ rm outputs/frames/*
     --kafka-broker kafka:29092 \
     --kafka-topic face-detections
 
+# multi source
+./deepstream \
+  -s file:///app/videos/faces_tracking.mp4 \
+  -s file:///app/videos/friends_short.mp4 \
+    -c config_infer_primary_yoloV8_face.txt \
+    --kafka-broker kafka:29092 \
+    --kafka-topic face-detections --disable-display 
+
 ./deepstream \
   -s file:///app/videos/friends.mp4 \
     -c config_infer_primary_yoloV8_face.txt \

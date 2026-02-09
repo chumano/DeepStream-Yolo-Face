@@ -7,16 +7,22 @@
   - save image to file
   - send metadata to Kafka (include image path)
 - improve face assessment (blur, small faces, wear mask, ...)
-- handle multi camera input
+- handle multi camera inputs
 
 ### C
-- run c program
 - [x] get timestamp from frame metadata
 - [x] save frame images with bounding boxes
   - [x] save image to file
   - [x] send metadata to Kafka (include image path)
+- handle multi camera inputs
+- config from file
+- pipeline elements configuration
+- pipepline monitoring and metrics
+- check region of interest (ROI) for face detection
+- improve face assessment (blur, small faces, wear mask, ...)
 
 ## Consumer applications
 - storage to Qdrant
 - storage images to disk
 - streaming with mjpeg 
+- consumer with rule engine

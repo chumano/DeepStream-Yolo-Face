@@ -19,7 +19,10 @@
 #endif
 
 // Basic settings
-static gchar *SOURCE = NULL;
+//static gchar *SOURCE = NULL;
+static gchar **SOURCES = NULL;  // Array of source URIs
+static guint NUM_SOURCES = 0;
+
 static gchar *INFER_CONFIG = NULL;
 static guint STREAMMUX_BATCH_SIZE = 1;
 static guint STREAMMUX_WIDTH = 1920;
@@ -61,6 +64,8 @@ static int MAX_DISPLAY_LEN = 128;
 static int NTP_TEXT_X_OFFSET = 30;
 static int NTP_TEXT_Y_OFFSET = 30;
 static int NTP_TEXT_FONT_SIZE = 20;
+
+static gboolean WAIT_FOR_USER_INPUT = TRUE;
 
 // =============================================================================
 // Detection Manager Structures

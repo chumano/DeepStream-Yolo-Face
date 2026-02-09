@@ -7,7 +7,8 @@ GST_DEBUG_CATEGORY_STATIC(deepstream_debug_category);
 #define GST_CAT_DEFAULT deepstream_debug_category
 
 GOptionEntry entries[] = {
-  {"source", 's', 0, G_OPTION_ARG_STRING, &SOURCE, "Source stream/file", NULL},
+  {"source", 's', 0, G_OPTION_ARG_STRING_ARRAY, &SOURCES, "Source streams/files (can specify multiple -s)", NULL},
+ // {"source", 's', 0, G_OPTION_ARG_STRING, &SOURCE, "Source stream/file", NULL},
   {"infer-config", 'c', 0, G_OPTION_ARG_STRING, &INFER_CONFIG, "Config infer file", NULL},
   {"streammux-batch-size", 'b', 0, G_OPTION_ARG_INT, &STREAMMUX_BATCH_SIZE, "Streammux batch-size (default 1)", NULL},
   {"streammux-width", 'w', 0, G_OPTION_ARG_INT, &STREAMMUX_WIDTH, "Streammux width (default 1920)", NULL},
@@ -732,7 +733,7 @@ calculate_crop_box(NvDsObjectMeta *obj_meta, CropBox *crop_box, guint frame_widt
 }
 
 static gchar *
-encode_crop_to_base64_jpeg(NvBufSurface *surface, CropBox *crop_box, gint quality)
+encode_crop_to_base64_jpeg(NvBufSurface *surface, CropBox *crop_box, gint quality, guint batch_id)
 {
   if (!surface) {
     GST_ERROR("Surface is NULL");
@@ -749,7 +750,13 @@ encode_crop_to_base64_jpeg(NvBufSurface *surface, CropBox *crop_box, gint qualit
     return NULL;
   }
 
-  NvBufSurfaceParams *surf_params = &surface->surfaceList[0];
+  // Use batch_id instead of hardcoded 0
+  if (batch_id >= surface->numFilled) {
+    GST_ERROR("Invalid batch_id %u (numFilled=%d)", batch_id, surface->numFilled);
+    return NULL;
+  }
+
+  NvBufSurfaceParams *surf_params = &surface->surfaceList[batch_id];
 
   // Additional validation
   if (!surf_params) {
@@ -764,7 +771,7 @@ encode_crop_to_base64_jpeg(NvBufSurface *surface, CropBox *crop_box, gint qualit
 
   GST_DEBUG("Surface info: width=%d, height=%d, pitch=%d, colorFormat=%d, memType=%d",
           surf_params->width, surf_params->height, surf_params->pitch,
-          surface->surfaceList[0].colorFormat, surface->memType);
+          surface->surfaceList[batch_id].colorFormat, surface->memType);
 
   // Validate crop box
   if (crop_box->left >= surf_params->width || crop_box->top >= surf_params->height ||
@@ -846,7 +853,7 @@ encode_crop_to_base64_jpeg(NvBufSurface *surface, CropBox *crop_box, gint qualit
   
   GST_DEBUG("Setting transform session params");
   GST_DEBUG("Source format: %d, Dest format: %d", 
-          surface->surfaceList[0].colorFormat, 
+          surface->surfaceList[batch_id].colorFormat, 
           dst_surface->surfaceList[0].colorFormat);
   
   if (NvBufSurfTransformSetSessionParams(&config_params) != 0) {
@@ -855,14 +862,32 @@ encode_crop_to_base64_jpeg(NvBufSurface *surface, CropBox *crop_box, gint qualit
     return NULL;
   }
   
-  GST_DEBUG("Performing surface transform (crop + color convert)");
+  GST_DEBUG("Performing surface transform (crop + color convert) for batch_id=%u", batch_id);
   
+  // NvBufSurfTransform operates on all surfaces in the batch.
+  // Temporarily adjust so only the target frame (batch_id) is processed.
+  NvBufSurfaceParams orig_first = surface->surfaceList[0];
+  guint orig_numFilled = surface->numFilled;
+  guint orig_batchSize = surface->batchSize;
+
+  if (batch_id > 0) {
+    surface->surfaceList[0] = surface->surfaceList[batch_id];
+  }
+  surface->numFilled = 1;
+  surface->batchSize = 1;
+
+
   NvBufSurfTransform_Error transform_err = NvBufSurfTransform(surface, dst_surface, &transform_params);
   if (transform_err != NvBufSurfTransformError_Success) {
-    GST_ERROR("Failed to transform surface, error=%d", transform_err);
+    GST_ERROR("Failed to transform surface for batch_id=%u, error=%d", batch_id, transform_err);
     NvBufSurfaceDestroy(dst_surface);
     return NULL;
   }
+
+  // Restore original surface state
+  surface->surfaceList[0] = orig_first;
+  surface->numFilled = orig_numFilled;
+  surface->batchSize = orig_batchSize;
 
   // Synchronize CUDA operations to ensure transform is complete
   cudaError_t cuda_err = cudaStreamSynchronize(0);
@@ -1176,15 +1201,41 @@ save_frame_to_jpeg(NvBufSurface *surface,
   config_params.gpu_id = surface->gpuId;
   config_params.cuda_stream = NULL;
 
-  if (NvBufSurfTransformSetSessionParams(&config_params) != 0 ||
-      NvBufSurfTransform(surface, dst_surface, &transform_params) !=
-          NvBufSurfTransformError_Success) {
-    GST_ERROR("NvBufSurfTransform failed");
+  // NvBufSurfTransform operates on all numFilled surfaces in the batch.
+  // Temporarily adjust so only the target frame (batch_id) is processed.
+  NvBufSurfaceParams orig_first = surface->surfaceList[0];
+  guint orig_numFilled = surface->numFilled;
+  guint orig_batchSize = surface->batchSize;
+  GST_DEBUG("Transforming only batch_id=%u (orig_numFilled=%d, orig_batchSize=%d)", batch_id, orig_numFilled, orig_batchSize);
+  if (batch_id > 0) {
+    surface->surfaceList[0] = surface->surfaceList[batch_id];
+  }
+  surface->numFilled = 1;
+  surface->batchSize = 1;
+
+  if (NvBufSurfTransformSetSessionParams(&config_params) != 0) {
+    GST_ERROR("Failed to set transform session params");
     NvBufSurfaceDestroy(dst_surface);
     g_free(relative_path);
     g_free(absolute_path);
     return NULL;
   }
+
+  NvBufSurfTransform_Error transform_err = NvBufSurfTransform(surface, dst_surface, &transform_params);
+
+  if (transform_err != NvBufSurfTransformError_Success) {
+    GST_ERROR("Failed to transform surface for batch_id=%u, error=%d", batch_id, transform_err);
+    NvBufSurfaceDestroy(dst_surface);
+    g_free(relative_path);
+    g_free(absolute_path);
+    return NULL;
+  }
+
+  // Restore original surface state
+  // Restore original surface state
+  surface->surfaceList[0] = orig_first;
+  surface->numFilled = orig_numFilled;
+  surface->batchSize = orig_batchSize;
 
   /* Ensure GPU work is complete */
   cudaStreamSynchronize(0);
@@ -1457,7 +1508,7 @@ process_object(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta, NvBufSurface
   calculate_crop_box(obj_meta, &crop_box, STREAMMUX_WIDTH, STREAMMUX_HEIGHT);
   gchar *face_image_base64 = NULL;
   if (ENABLE_CROP_IMAGE && surface) {
-    face_image_base64 = encode_crop_to_base64_jpeg(surface, &crop_box, 85);
+    face_image_base64 = encode_crop_to_base64_jpeg(surface, &crop_box, 85, frame_meta->batch_id);
   }
 
   // Create face context
@@ -1841,7 +1892,7 @@ appsink_new_sample_callback(GstElement *appsink, gpointer user_data)
 
     // check frame is infer done
     if (frame_meta->bInferDone == FALSE) {
-      GST_DEBUG("Frame %d inference not done yet", frame_meta->frame_num);
+      GST_TRACE("Frame %d inference not done yet", frame_meta->frame_num);
       continue;
     }
 
@@ -1916,10 +1967,22 @@ main(gint argc, char *argv[])
   }
   g_option_context_free(ctx);
 
-  if (!SOURCE) {
-    g_printerr("ERROR - Source not found\n");
+  // if (!SOURCE) {
+  //   g_printerr("ERROR - Source not found\n");
+  //   return -1;
+  // }
+  NUM_SOURCES = g_strv_length(SOURCES);
+
+  if (NUM_SOURCES == 0) {
+    g_printerr("ERROR - No sources provided\n");
     return -1;
   }
+
+  if (STREAMMUX_BATCH_SIZE < NUM_SOURCES) {
+    STREAMMUX_BATCH_SIZE = NUM_SOURCES;
+    g_print("Setting batch-size to %d to match number of sources\n", STREAMMUX_BATCH_SIZE);
+  }
+
 
   if (!INFER_CONFIG) {
     g_printerr("ERROR - Config infer not found\n");
@@ -1984,10 +2047,17 @@ main(gint argc, char *argv[])
     return -1;
   }
 
-  GstElement *uridecodebin = create_uridecodebin(0, SOURCE, nvstreammux);
-  if (!uridecodebin || !gst_bin_add(GST_BIN(pipeline), uridecodebin)) {
-    g_printerr("ERROR - Failed to create uridecodebin\n");
-    return -1;
+  // GstElement *uridecodebin = create_uridecodebin(0, SOURCE, nvstreammux);
+  // if (!uridecodebin || !gst_bin_add(GST_BIN(pipeline), uridecodebin)) {
+  //   g_printerr("ERROR - Failed to create uridecodebin\n");
+  //   return -1;
+  // }
+  for (guint i = 0; i < NUM_SOURCES; i++) {
+    GstElement *uridecodebin = create_uridecodebin(i, SOURCES[i], nvstreammux);
+    if (!uridecodebin || !gst_bin_add(GST_BIN(pipeline), uridecodebin)) {
+      g_printerr("ERROR - Failed to create uridecodebin for source %d\n", i);
+      return -1;
+    }
   }
 
   GstElement *nvinfer = gst_element_factory_make("nvinfer", "nvinfer");
@@ -2107,7 +2177,8 @@ main(gint argc, char *argv[])
 
   //================================================
   GST_DEBUG("\n");
-  GST_DEBUG("SOURCE: %s", SOURCE);
+  //GST_DEBUG("SOURCE: %s", SOURCE);
+  GST_DEBUG("NUM_SOURCES: %d", NUM_SOURCES);
   GST_DEBUG("INFER_CONFIG: %s", INFER_CONFIG);
   GST_DEBUG("STREAMMUX_BATCH_SIZE: %d", STREAMMUX_BATCH_SIZE);
   GST_DEBUG("STREAMMUX_WIDTH: %d", STREAMMUX_WIDTH);
@@ -2128,6 +2199,12 @@ main(gint argc, char *argv[])
   }
   GST_DEBUG("\n");
 
+  // wait user to press enter key to start
+  if (WAIT_FOR_USER_INPUT) {
+    g_print("Press ENTER to start processing ...\n");
+    getchar();
+  }
+
   GstCaps *caps = gst_caps_from_string("video/x-raw(memory:NVMM), format=RGBA");
   g_object_set(G_OBJECT(capsfilter), "caps", caps, NULL);
   gst_caps_unref(caps);
@@ -2142,7 +2219,19 @@ main(gint argc, char *argv[])
       "ll-config-file", "/opt/nvidia/deepstream/deepstream/samples/configs/deepstream-app/config_tracker_NvDCF_perf.yml",
       "gpu-id", GPU_ID, "display-tracking-id", 1, NULL);
 
-  if (g_strrstr(SOURCE, "file://")) {
+  // if (g_strrstr(SOURCE, "file://")) {
+  //   g_object_set(G_OBJECT(nvstreammux), "live-source", 0, NULL);
+  // }
+  // Check if all sources are file-based (non-live)
+  gboolean all_file_sources = TRUE;
+  for (guint i = 0; i < NUM_SOURCES; i++) {
+    if (!g_strrstr(SOURCES[i], "file://")) {
+      all_file_sources = FALSE;
+      break;
+    }
+  }
+  if (all_file_sources) {
+    g_print("All sources are file-based. Setting live-source to 0.\n");
     g_object_set(G_OBJECT(nvstreammux), "live-source", 0, NULL);
   }
 
@@ -2219,7 +2308,7 @@ main(gint argc, char *argv[])
     }
   }
   
-  enable_perf_measurement(perf_struct, perf_pad, 1, PERF_MEASUREMENT_INTERVAL_SEC, 0, perf_cb);
+  enable_perf_measurement(perf_struct, perf_pad, NUM_SOURCES, PERF_MEASUREMENT_INTERVAL_SEC, 0, perf_cb);
 
   // ===============================================
   gst_element_set_state(pipeline, GST_STATE_PAUSED);
@@ -2240,9 +2329,13 @@ main(gint argc, char *argv[])
 
   g_free(perf_struct);
 
-  if (SOURCE) {
-    g_free(SOURCE);
+  // if (SOURCE) {
+  //   g_free(SOURCE);
+  // }
+  if (SOURCES) {
+    g_strfreev(SOURCES);  // Frees array and all strings
   }
+
 
   if (INFER_CONFIG) {
     g_free(INFER_CONFIG);

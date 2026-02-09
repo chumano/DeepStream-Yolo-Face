@@ -185,7 +185,13 @@ class FaceStorage:
         """Create output directory if needed."""
         if self.config.save_images:
             os.makedirs(self.config.output_dir, exist_ok=True)
-    
+            
+    def _get_source_dir(self, source_id: int) -> str:
+        """Get or create directory for a specific source ID."""
+        source_dir = os.path.join(self.config.output_dir, f"source_{source_id}")
+        os.makedirs(source_dir, exist_ok=True)
+        return source_dir
+
     def _generate_filename(
         self,
         detection: Dict[str, Any],
@@ -195,9 +201,13 @@ class FaceStorage:
         """Generate filename from detection metadata."""
         timestamp = detection.get('timestamp', time.time())
         dt = datetime.fromtimestamp(timestamp)
+        source_id = detection.get('source_id', 0)
         object_id = detection.get('object_id', 0)
         frame_num = detection.get('frame_number', 0)
         quality_score = detection.get('face_quality', {}).get('quality_score', 0)
+        
+        # Get source-specific directory
+        source_dir = self._get_source_dir(source_id)
         
         filename = f"{prefix}_{object_id:03d}_{dt.strftime('%Y%m%d_%H%M%S')}"
         filename += f"_f{frame_num}_q{quality_score:.3f}"
@@ -205,7 +215,7 @@ class FaceStorage:
             filename += f"_{suffix}"
         filename += ".jpg"
         
-        return os.path.join(self.config.output_dir, filename)
+        return os.path.join(source_dir, filename)
     
     def save_face_image(self, detection: Dict[str, Any]) -> Optional[str]:
         """Save raw face image."""
@@ -444,6 +454,7 @@ class DetectionPrinter:
         """Print detection information."""
         logger.info("\n--- New Face Detection ---")
         logger.info(f"Partition: {partition}, Offset: {offset}")
+        logger.info(f"Source ID: {detection['source_id']}")
         logger.info(f"Object ID: {detection['object_id']}")
         # Format timestamp to human-readable string with milliseconds
         ts = detection['timestamp']
@@ -453,6 +464,7 @@ class DetectionPrinter:
             ts_human = str(ts)
         logger.info(f"Timestamp: {ts} ({ts_human})")
         logger.info(f"Confidence: {detection['confidence']:.2f}")
+        logger.info(f"Has face image: {detection.get('face_image', None) is not None}")
         logger.info(f"Frame Size: {detection.get('frame_size', {})}")
         
         bbox = detection['bbox']
