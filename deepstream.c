@@ -43,6 +43,31 @@ get_current_time(void)
 // Detection Store Functions
 // =============================================================================
 
+static guint
+detection_key_hash(gconstpointer key)
+{
+  const DetectionKey *dk = (const DetectionKey *)key;
+  // Combine source_id and object_id for unique hash
+  return g_int_hash(&dk->source_id) ^ g_int64_hash(&dk->object_id);
+}
+
+static gboolean
+detection_key_equal(gconstpointer a, gconstpointer b)
+{
+  const DetectionKey *ka = (const DetectionKey *)a;
+  const DetectionKey *kb = (const DetectionKey *)b;
+  return (ka->source_id == kb->source_id) && (ka->object_id == kb->object_id);
+}
+
+static DetectionKey *
+detection_key_new(guint source_id, guint64 object_id)
+{
+  DetectionKey *key = g_malloc(sizeof(DetectionKey));
+  key->source_id = source_id;
+  key->object_id = object_id;
+  return key;
+}
+
 static void
 detection_free(Detection *detection)
 {
@@ -66,8 +91,10 @@ static DetectionStore *
 detection_store_new(gdouble sent_record_ttl_sec, gdouble pending_ttl_sec)
 {
   DetectionStore *store = g_malloc0(sizeof(DetectionStore));
-  store->pending = g_hash_table_new_full(g_int64_hash, g_int64_equal, g_free, (GDestroyNotify) detection_free);
-  store->sent = g_hash_table_new_full(g_int64_hash, g_int64_equal, g_free, (GDestroyNotify) detection_record_free);
+  store->pending = g_hash_table_new_full(detection_key_hash, detection_key_equal, 
+                                         g_free, (GDestroyNotify) detection_free);
+  store->sent = g_hash_table_new_full(detection_key_hash, detection_key_equal, 
+                                      g_free, (GDestroyNotify) detection_record_free);
   pthread_mutex_init(&store->pending_lock, NULL);
   pthread_mutex_init(&store->sent_lock, NULL);
   store->sent_record_ttl_sec = sent_record_ttl_sec;
@@ -88,11 +115,12 @@ detection_store_free(DetectionStore *store)
 }
 
 static Detection *
-detection_store_get_pending(DetectionStore *store, guint64 object_id)
+detection_store_get_pending(DetectionStore *store, guint source_id, guint64 object_id)
 {
   Detection *result = NULL;
   pthread_mutex_lock(&store->pending_lock);
-  result = g_hash_table_lookup(store->pending, &object_id);
+  DetectionKey key = {.source_id = source_id, .object_id = object_id};
+  result = g_hash_table_lookup(store->pending, &key);
   pthread_mutex_unlock(&store->pending_lock);
   return result;
 }
@@ -101,31 +129,32 @@ static void
 detection_store_set_pending(DetectionStore *store, Detection *detection)
 {
   pthread_mutex_lock(&store->pending_lock);
-  guint64 *key = g_malloc(sizeof(guint64));
-  *key = detection->object_id;
+  DetectionKey *key = detection_key_new(detection->source_id, detection->object_id);
   g_hash_table_replace(store->pending, key, detection);
   pthread_mutex_unlock(&store->pending_lock);
 }
 
 static Detection *
-detection_store_remove_pending(DetectionStore *store, guint64 object_id)
+detection_store_remove_pending(DetectionStore *store, guint source_id, guint64 object_id)
 {
   Detection *result = NULL;
   pthread_mutex_lock(&store->pending_lock);
-  result = g_hash_table_lookup(store->pending, &object_id);
+  DetectionKey key = {.source_id = source_id, .object_id = object_id};
+  result = g_hash_table_lookup(store->pending, &key);
   if (result) {
-    g_hash_table_steal(store->pending, &object_id);
+    g_hash_table_steal(store->pending, &key);
   }
   pthread_mutex_unlock(&store->pending_lock);
   return result;
 }
 
 static DetectionRecord *
-detection_store_get_sent(DetectionStore *store, guint64 object_id)
+detection_store_get_sent(DetectionStore *store, guint source_id, guint64 object_id)
 {
   DetectionRecord *result = NULL;
   pthread_mutex_lock(&store->sent_lock);
-  result = g_hash_table_lookup(store->sent, &object_id);
+  DetectionKey key = {.source_id = source_id, .object_id = object_id};
+  result = g_hash_table_lookup(store->sent, &key);
   pthread_mutex_unlock(&store->sent_lock);
   return result;
 }
@@ -135,32 +164,34 @@ detection_store_record_sent(DetectionStore *store, Detection *detection)
 {
   pthread_mutex_lock(&store->sent_lock);
   
-  DetectionRecord *existing = g_hash_table_lookup(store->sent, &detection->object_id);
+  DetectionKey key = {.source_id = detection->source_id, .object_id = detection->object_id};
+  DetectionRecord *existing = g_hash_table_lookup(store->sent, &key);
   if (existing) {
     existing->quality_score = detection->quality_score;
     existing->sent_timestamp = get_current_time();
     existing->send_count++;
     existing->last_seen_timestamp = existing->sent_timestamp;
   } else {
-    guint64 *key = g_malloc(sizeof(guint64));
-    *key = detection->object_id;
+    DetectionKey *new_key = detection_key_new(detection->source_id, detection->object_id);
     DetectionRecord *record = g_malloc0(sizeof(DetectionRecord));
+    record->source_id = detection->source_id;
     record->object_id = detection->object_id;
     record->quality_score = detection->quality_score;
     record->sent_timestamp = get_current_time();
     record->send_count = 1;
     record->last_seen_timestamp = record->sent_timestamp;
-    g_hash_table_replace(store->sent, key, record);
+    g_hash_table_replace(store->sent, new_key, record);
   }
   
   pthread_mutex_unlock(&store->sent_lock);
 }
 
 static void
-detection_store_update_last_seen(DetectionStore *store, guint64 object_id)
+detection_store_update_last_seen(DetectionStore *store, guint source_id, guint64 object_id)
 {
   pthread_mutex_lock(&store->sent_lock);
-  DetectionRecord *record = g_hash_table_lookup(store->sent, &object_id);
+  DetectionKey key = {.source_id = source_id, .object_id = object_id};
+  DetectionRecord *record = g_hash_table_lookup(store->sent, &key);
   if (record) {
     record->last_seen_timestamp = get_current_time();
   }
@@ -527,7 +558,7 @@ detection_manager_send_kafka(DetectionManager *manager, Detection *detection)
 }
 
 static void
-detection_manager_queue(DetectionManager *manager, guint64 object_id,
+detection_manager_queue(DetectionManager *manager, guint source_id, guint64 object_id,
                         gdouble quality_score, const gchar *json_data)
 {
   if (!manager->enabled) {
@@ -535,22 +566,23 @@ detection_manager_queue(DetectionManager *manager, guint64 object_id,
   }
   
   gdouble current_time = get_current_time();
-  DetectionRecord *sent_record = detection_store_get_sent(manager->store, object_id);
+  DetectionRecord *sent_record = detection_store_get_sent(manager->store, source_id, object_id);
   gboolean is_resend = (sent_record != NULL);
   
   // Update last seen time if we have a sent record
   if (sent_record != NULL) {
-    detection_store_update_last_seen(manager->store, object_id);
+    detection_store_update_last_seen(manager->store, source_id, object_id);
   }
   
   Detection *detection = g_malloc0(sizeof(Detection));
+  detection->source_id = source_id;
   detection->object_id = object_id;
   detection->quality_score = quality_score;
   detection->timestamp = current_time;
   detection->is_resend = is_resend;
   detection->json_data = g_strdup(json_data);
   
-  Detection *pending = detection_store_get_pending(manager->store, object_id);
+  Detection *pending = detection_store_get_pending(manager->store, source_id, object_id);
   
   if (!detection_manager_should_queue(manager, detection, pending, sent_record)) {
     detection_manager_increment_stat(manager, "skipped");
@@ -558,9 +590,9 @@ detection_manager_queue(DetectionManager *manager, guint64 object_id,
     return;
   }
 
-  if( pending ) {
-    GST_DEBUG("Replacing pending detection for object_id=%lu (old_quality=%.3f, new_quality=%.3f)\n",
-             object_id, pending->quality_score, quality_score);
+  if (pending) {
+    GST_DEBUG("Replacing pending detection for source=%u object_id=%lu (old_quality=%.3f, new_quality=%.3f)\n",
+             source_id, object_id, pending->quality_score, quality_score);
   }
   
   detection_store_set_pending(manager->store, detection);
@@ -597,22 +629,25 @@ detection_manager_process_pending(DetectionManager *manager)
   
   GHashTableIter iter;
   gpointer key, value;
-  GList *ready_ids = NULL;
+  GList *ready_keys = NULL;
   
   g_hash_table_iter_init(&iter, manager->store->pending);
   while (g_hash_table_iter_next(&iter, &key, &value)) {
     Detection *detection = (Detection *) value;
     if (detection_manager_should_send(manager, detection, current_time)) {
-      ready_ids = g_list_prepend(ready_ids, GUINT_TO_POINTER(detection->object_id));
+      DetectionKey *dk = g_malloc(sizeof(DetectionKey));
+      dk->source_id = detection->source_id;
+      dk->object_id = detection->object_id;
+      ready_keys = g_list_prepend(ready_keys, dk);
     }
   }
   
   pthread_mutex_unlock(&manager->store->pending_lock);
   
   // Send ready detections
-  for (GList *l = ready_ids; l != NULL; l = l->next) {
-    guint64 object_id = GPOINTER_TO_UINT(l->data);
-    Detection *detection = detection_store_remove_pending(manager->store, object_id);
+  for (GList *l = ready_keys; l != NULL; l = l->next) {
+    DetectionKey *dk = (DetectionKey *)l->data;
+    Detection *detection = detection_store_remove_pending(manager->store, dk->source_id, dk->object_id);
     
     if (detection) {
       if (detection_manager_send_kafka(manager, detection)) {
@@ -627,9 +662,10 @@ detection_manager_process_pending(DetectionManager *manager)
       }
       detection_free(detection);
     }
+    g_free(dk);
   }
   
-  g_list_free(ready_ids);
+  g_list_free(ready_keys);
   return sent_count;
 }
 
@@ -1538,7 +1574,7 @@ process_object(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta, NvBufSurface
       gchar *json_data = build_detection_json(&ctx);
 
       // Queue detection for Kafka
-      detection_manager_queue(detection_manager, ctx.object_id,
+      detection_manager_queue(detection_manager,ctx.source_id,  ctx.object_id,
                               ctx.quality_score, json_data);         
       g_free(json_data);
   }

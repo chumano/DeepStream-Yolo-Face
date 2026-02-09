@@ -57,6 +57,7 @@ clean: clean_images
 
 clean_images:
 	- rm -r ./outputs/frames/*
+	- rm -r ./outputs/faces/*
 
 run: clean_images $(APP)
 	GST_DEBUG=deepstream:4 ./$(APP) -s file:///app/videos/faces_tracking.mp4  \

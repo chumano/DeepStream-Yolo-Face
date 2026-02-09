@@ -14,11 +14,12 @@
 - [x] save frame images with bounding boxes
   - [x] save image to file
   - [x] send metadata to Kafka (include image path)
-- handle multi camera inputs
-- config from file
+- [x] handle multi camera inputs
+- config from key value file
 - pipeline elements configuration
 - pipepline monitoring and metrics
 - check region of interest (ROI) for face detection
+- handle dynamic input sources (add/remove camera at runtime)
 - improve face assessment (blur, small faces, wear mask, ...)
 
 ## Consumer applications

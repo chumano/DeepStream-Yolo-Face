@@ -113,7 +113,14 @@ typedef struct _FaceContext {
   const gchar *face_image_base64;
 } FaceContext;
 
+// Composite key for tracking detections across multiple sources
+typedef struct _DetectionKey {
+  guint source_id;
+  guint64 object_id;
+} DetectionKey;
+
 typedef struct _Detection {
+  guint source_id;           // Added: source identifier
   guint64 object_id;
   gdouble quality_score;
   gdouble timestamp;
@@ -122,6 +129,7 @@ typedef struct _Detection {
 } Detection;
 
 typedef struct _DetectionRecord {
+  guint source_id;           // Added: source identifier
   guint64 object_id;
   gdouble quality_score;
   gdouble sent_timestamp;
@@ -130,8 +138,8 @@ typedef struct _DetectionRecord {
 } DetectionRecord;
 
 typedef struct _DetectionStore {
-  GHashTable *pending;      // object_id -> Detection*
-  GHashTable *sent;         // object_id -> DetectionRecord*
+  GHashTable *pending;      // DetectionKey* -> Detection*
+  GHashTable *sent;         // DetectionKey* -> DetectionRecord*
   pthread_mutex_t pending_lock;
   pthread_mutex_t sent_lock;
   gdouble sent_record_ttl_sec;
