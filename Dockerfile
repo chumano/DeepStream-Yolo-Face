@@ -84,18 +84,17 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 RUN pip3 install kafka-python==2.3.0 numpy==1.26.4 opencv-python==4.11.0.86
 
 # Copy only build files first for better layer caching
-COPY Makefile ./
-COPY nvdsinfer_custom_impl_Yolo_face/ ./nvdsinfer_custom_impl_Yolo_face/
+COPY src/Makefile ./
+COPY src/nvdsinfer_custom_impl_Yolo_face/ ./nvdsinfer_custom_impl_Yolo_face/
 
 # Build the custom parser library
 RUN make -C nvdsinfer_custom_impl_Yolo_face clean && \
     make -C nvdsinfer_custom_impl_Yolo_face CUDA_VER=${CUDA_VER}
 
 # Copy remaining project files
-COPY config_infer_primary_*.txt labels.txt ./
-COPY deepstream.* ./
-COPY utils/ ./utils/
-COPY modules/ ./modules/
+COPY configs/config_infer_primary_*.txt configs/labels.txt ./
+COPY src/deepstream.* ./
+COPY src/modules/ ./modules/
 
 # Build the main application
 RUN make clean && make CUDA_VER=${CUDA_VER}

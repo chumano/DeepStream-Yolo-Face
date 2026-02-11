@@ -10,41 +10,38 @@ Then inside container run inference:
 ```bash
 GST_DEBUG=*:3 python3 deepstream.py \
     -s file:///app/videos/friends_short.mp4 \
-    -c config_infer_primary_yoloV8_face.txt
+    -c /app/configs/config_infer_primary_yoloV8_face.txt
 
 python3 deepstream.py \
     -s file:///app/videos/jefferson_fisher.mp4 \
-    -c config_infer_primary_yoloV8_face.txt
-
+    -c /app/configs/config_infer_primary_yoloV8_face.txt
 python3 deepstream.py \
     -s file:///app/videos/faces_tracking.mp4 \
-    -c config_infer_primary_yoloV8_face.txt
+    -c /app/configs/config_infer_primary_yoloV8_face.txt
 
 # send to kafka `pip3 install kafka-python==2.3.0`
 python3 deepstream.py \
   -s file:///app/videos/faces_tracking.mp4 \
-  -c config_infer_primary_yoloV8_face.txt \
+  -c /app/configs/config_infer_primary_yoloV8_face.txt \
   --kafka-broker kafka:29092 \
   --kafka-topic face-detections
 
-python3 deepstream.py -s "rtsp://admin:dt%4012345@192.168.1.203:554/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif" -c config_infer_primary_yoloV8_face.txt --kafka-broker kafka:29092 --kafka-topic face-detections
-
+python3 deepstream.py -s "rtsp://admin:dt%4012345@192.168.1.203:554/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif" -c /app/configs/config_infer_primary_yoloV8_face.txt --kafka-broker kafka:29092 --kafka-topic face-detections
 ##################
 # or C app
 rm outputs/frames/*
 
 ./deepstream \
     -s file:///app/videos/friends_short.mp4 \
-    -c config_infer_primary_yoloV8_face.txt
+    -c /app/configs/config_infer_primary_yoloV8_face.txt
 
 ./deepstream \
     -s file:///app/videos/faces_tracking.mp4 \
-    -c config_infer_primary_yoloV8_face.txt
-
+    -c /app/configs/config_infer_primary_yoloV8_face.txt
 # send to kafka
 ./deepstream \
   -s file:///app/videos/faces_tracking.mp4 \
-    -c config_infer_primary_yoloV8_face.txt \
+    -c /app/configs/config_infer_primary_yoloV8_face.txt \
     --kafka-broker kafka:29092 \
     --kafka-topic face-detections
 
@@ -52,13 +49,13 @@ rm outputs/frames/*
 ./deepstream \
   -s file:///app/videos/faces_tracking.mp4 \
   -s file:///app/videos/friends_short.mp4 \
-    -c config_infer_primary_yoloV8_face.txt \
+    -c /app/configs/config_infer_primary_yoloV8_face.txt \
     --kafka-broker kafka:29092 \
     --kafka-topic face-detections --disable-display 
 
 ./deepstream \
   -s file:///app/videos/friends.mp4 \
-    -c config_infer_primary_yoloV8_face.txt \
+    -c /app/configs/config_infer_primary_yoloV8_face.txt \
     --kafka-broker kafka:29092 \
     --kafka-topic face-detections --disable-display --disable-crop-image
 
@@ -220,19 +217,19 @@ docker-compose up
 docker-compose run --rm deepstream-yolo-face \
     python3 deepstream.py \
     -s file:///app/videos/friends_short.mp4 \
-    -c config_infer_primary_yoloV8_face.txt
+    -c /app/configs/config_infer_primary_yoloV8_face.txt
 
 # Run with RTSP stream
 docker-compose run --rm deepstream-yolo-face \
     python3 deepstream.py \
     -s rtsp://your-rtsp-url \
-    -c config_infer_primary_yoloV8_face.txt
+    -c /app/configs/config_infer_primary_yoloV8_face.txt
 
 # Run C application
 docker-compose run --rm deepstream-yolo-face \
     ./deepstream \
     -s file:///app/videos/friends_short.mp4 \
-    -c config_infer_primary_yoloV8_face.txt
+    -c /app/configs/config_infer_primary_yoloV8_face.txt
 ```
 
 ### Development Mode (Shell Access)
@@ -248,7 +245,7 @@ docker-compose --profile dev run --rm deepstream-yolo-face-dev
 
 GST_DEBUG=*:3 python3 deepstream.py \
     -s file:///app/videos/friends_short.mp4 \
-    -c config_infer_primary_yoloV8_face.txt
+    -c /app/configs/config_infer_primary_yoloV8_face.txt
 ```
 
 ### Using docker run directly
@@ -263,13 +260,15 @@ docker run --rm -it \
     -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
     -v $(pwd)/models:/app/models:rw \
     -v $(pwd)/videos:/app/videos:ro \
+    -v $(pwd)/outputs:/app/outputs:rw \
+    -v $(pwd)/configs:/app/configs:ro \
     --network host \
     --ipc host \
     --shm-size=2g \
     deepstream-yolo-face:latest \
     python3 deepstream.py \
     -s file:///app/videos/your_video.mp4 \
-    -c config_infer_primary_yoloV8_face.txt
+    -c /app/configs/config_infer_primary_yoloV8_face.txt
 ```
 
 ## Model Setup

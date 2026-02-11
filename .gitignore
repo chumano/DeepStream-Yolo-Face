@@ -7,6 +7,11 @@ temp/
 # Log files
 *.log
 
+# Build artifacts
+src/deepstream
+*.o
+*.so
+
 # Models and outputs
 models
 !models/yolov8n-face.pt

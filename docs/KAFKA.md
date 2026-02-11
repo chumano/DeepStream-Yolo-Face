@@ -46,18 +46,7 @@ docker exec -it ds-kafka kafka-console-consumer \
   --property print.value=true
 ```
 
-### Using Python Consumer
 
-Create a file `kafka_consumer.py`:
-`pip3 install kafka-python`
-
-Run the consumer:
-```bash
-python3 kafka_consumer.py
-
-
-SAVE_LANDMARKS=True python3 kafka_consumer.py
-```
 ## Topic Management
 
 ### Create topic manually (optional - auto-created by default):

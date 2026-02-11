@@ -21,7 +21,7 @@ scaling-compute-hw=0
 force-implicit-batch-dim=0
 #workspace-size=2000
 parse-bbox-instance-mask-func-name=NvDsInferParseYoloFace
-custom-lib-path=nvdsinfer_custom_impl_Yolo_face/libnvdsinfer_custom_impl_Yolo_face.so
+custom-lib-path=/app/DeepStream-Yolo-Face/nvdsinfer_custom_impl_Yolo_face/libnvdsinfer_custom_impl_Yolo_face.so
 output-instance-mask=1
 
 [class-attrs-all]

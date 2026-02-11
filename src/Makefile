@@ -61,7 +61,7 @@ clean_images:
 
 run: clean_images $(APP)
 	GST_DEBUG=deepstream:4 ./$(APP) -s file:///app/videos/faces_tracking.mp4  \
-	   	-c config_infer_primary_yoloV8_face.txt  \
+	   	-c /app/configs/config_infer_primary_yoloV8_face.txt  \
 		--kafka-broker kafka:29092  --kafka-topic face-detections
 
 .PHONY: all clean help clean_images
