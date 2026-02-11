@@ -15,7 +15,7 @@
   - [x] save image to file
   - [x] send metadata to Kafka (include image path)
 - [x] handle multi camera inputs
-- config from key value file
+- [x] config from key value file
 - pipeline elements configuration
 - pipepline monitoring and metrics
 - check region of interest (ROI) for face detection
@@ -23,7 +23,8 @@
 - improve face assessment (blur, small faces, wear mask, ...)
 
 ## Consumer applications
-- storage to Qdrant
-- storage images to disk
-- streaming with mjpeg 
-- consumer with rule engine
+- [x] crop face images from frames if face_image not provided by deepstream
+- [x] storage face images to disk
+- [ ] storage face embeddings to Qdrant
+- [ ] streaming with mjpeg 
+- [ ] consumer with rule engine

@@ -116,7 +116,8 @@ Each detection message contains:
   },
   "frame_number": 1234,
   "source_id": 0,
-  "face_image": "<base64-encoded-jpeg>"
+  "face_image": "<base64-encoded-jpeg>",
+  "frame_image_path": "/app/outputs/frames/source0/frame_0001234.jpg"
 }
 ```
 

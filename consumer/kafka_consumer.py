@@ -33,7 +33,8 @@ logger = logging.getLogger(__name__)
 @dataclass
 class Config:
     """Application configuration."""
-    output_dir: str = field(default_factory=lambda: os.getenv("OUTPUT_DIR", "outputs/faces"))
+    frames_output_dir: str = field(default_factory=lambda: os.getenv("FRAMES_OUTPUT_DIR", "../outputs/frames"))
+    faces_output_dir: str = field(default_factory=lambda: os.getenv("FACES_OUTPUT_DIR", "../outputs/faces"))
     save_images: bool = field(default_factory=lambda: os.getenv("SAVE_IMAGES", "True").lower() in ("1", "true", "yes"))
     save_aligned: bool = field(default_factory=lambda: os.getenv("SAVE_ALIGNED", "True").lower() in ("1", "true", "yes"))
     save_landmarks: bool = field(default_factory=lambda: os.getenv("SAVE_LANDMARKS", "False").lower() in ("1", "true", "yes"))
@@ -184,11 +185,11 @@ class FaceStorage:
     def _ensure_output_dir(self) -> None:
         """Create output directory if needed."""
         if self.config.save_images:
-            os.makedirs(self.config.output_dir, exist_ok=True)
+            os.makedirs(self.config.faces_output_dir, exist_ok=True)
             
     def _get_source_dir(self, source_id: int) -> str:
         """Get or create directory for a specific source ID."""
-        source_dir = os.path.join(self.config.output_dir, f"source_{source_id}")
+        source_dir = os.path.join(self.config.faces_output_dir, f"source_{source_id}")
         os.makedirs(source_dir, exist_ok=True)
         return source_dir
 
@@ -217,28 +218,75 @@ class FaceStorage:
         
         return os.path.join(source_dir, filename)
     
+    def _crop_face_from_frame(self, detection: Dict[str, Any], bbox: Dict[str, float]) -> Optional[bytes]:
+        """Crop face from frame image using bbox and return JPEG bytes."""
+        logger.info("Cropping face from frame image")
+        frame_path = detection.get('frame_image_path')
+        
+        if not frame_path:
+            return None
+        if not bbox:
+            logger.warning("No bbox provided for cropping face from frame")
+            return None
+
+        frame_path_abs = frame_path if os.path.isabs(frame_path) else os.path.join(self.config.frames_output_dir, frame_path)
+        if not os.path.exists(frame_path_abs):
+            logger.warning(f"Frame image not found: {frame_path_abs}")
+            return None
+        frame_img = cv2.imread(frame_path_abs)
+        if frame_img is None:
+            logger.warning(f"Failed to read frame image: {frame_path_abs}")
+            return None
+        left = int(bbox['left'])
+        top = int(bbox['top'])
+        width = int(bbox['width'])
+        height = int(bbox['height'])
+        # Ensure bbox is within image bounds
+        h, w = frame_img.shape[:2]
+        left = max(0, left)
+        top = max(0, top)
+        right = min(w, left + width)
+        bottom = min(h, top + height)
+        if right <= left or bottom <= top:
+            logger.warning(f"Invalid bbox for cropping: {bbox}")
+            return None
+        face_crop = frame_img[top:bottom, left:right]
+        # Encode as JPEG
+        ret, buf = cv2.imencode('.jpg', face_crop)
+        if not ret:
+            logger.warning("Failed to encode cropped face image")
+            return None
+        return buf.tobytes()
+
     def save_face_image(self, detection: Dict[str, Any]) -> Optional[str]:
-        """Save raw face image."""
+        """Save raw face image. If face_image is not present, crop from frame_image_path using bbox."""
         if not self.config.save_images:
             return None
-        
+
         face_image_base64 = detection.get('face_image')
-        if not face_image_base64:
-            return None
-        
         try:
-            image_data = base64.b64decode(face_image_base64)
+            if face_image_base64:
+                image_data = base64.b64decode(face_image_base64)
+            else:
+                box_key = 'crop_bbox' if detection.get('crop_bbox') else 'bbox'
+                bbox = detection.get(box_key)
+                image_data = self._crop_face_from_frame(detection, bbox )
+                if image_data is None:
+                    return None
+                # set the cropped image back to detection for further processing
+                detection['face_image'] = base64.b64encode(image_data).decode('utf-8')
+                detection['crop_bbox'] = detection.get(box_key)
+
             filepath = self._generate_filename(detection)
-            
             with open(filepath, 'wb') as f:
                 f.write(image_data)
-            
+
             # Optionally save version with landmarks
             if self.config.save_landmarks:
                 self._save_with_landmarks(detection, image_data)
-            
+
             return filepath
-        
+
         except Exception as e:
             logger.error(f"Failed to save face image: {e}")
             return None
@@ -464,6 +512,8 @@ class DetectionPrinter:
             ts_human = str(ts)
         logger.info(f"Timestamp: {ts} ({ts_human})")
         logger.info(f"Confidence: {detection['confidence']:.2f}")
+        # frame_image_path is relative path to saved frame image in frames output dir
+        logger.info(f"Frame image path: {detection.get('frame_image_path', 'N/A')}") 
         logger.info(f"Has face image: {detection.get('face_image', None) is not None}")
         logger.info(f"Frame Size: {detection.get('frame_size', {})}")
         
@@ -548,10 +598,10 @@ class FaceDetectionConsumer:
     
     def _cleanup_output_dir(self) -> None:
         """Clean up existing output directory."""
-        if self.config.save_images and os.path.exists(self.config.output_dir):
-            for f in os.listdir(self.config.output_dir):
+        if self.config.save_images and os.path.exists(self.config.faces_output_dir):
+            for f in os.listdir(self.config.faces_output_dir):
                 try:
-                    os.remove(os.path.join(self.config.output_dir, f))
+                    os.remove(os.path.join(self.config.faces_output_dir, f))
                 except Exception as e:
                     logger.warning(f"Failed to remove {f}: {e}")
     
@@ -566,7 +616,7 @@ class FaceDetectionConsumer:
             logger.info(f"Partitions: {self.consumer.partitions_for_topic(self.config.kafka_topic)}")
             
             if self.config.save_images:
-                logger.info(f"Saving images to: {os.path.abspath(self.config.output_dir)}")
+                logger.info(f"Saving images to: {os.path.abspath(self.config.faces_output_dir)}")
                 logger.info(f"  - Raw images: enabled")
                 logger.info(f"  - Aligned images: {'enabled' if self.config.save_aligned else 'disabled'}")
                 logger.info(f"  - Landmarks overlay: {'enabled' if self.config.save_landmarks else 'disabled'}")
@@ -616,14 +666,14 @@ class FaceDetectionConsumer:
         self.printer.print_detection(detection, message.partition, message.offset)
         
         # Save raw face image
-        if detection.get('face_image'):
-            saved_path = self.storage.save_face_image(detection)
-            if saved_path:
-                self.images_saved += 1
-                logger.info(f"\n📷 Face image saved: {saved_path}")
+     
+        saved_path = self.storage.save_face_image(detection)
+        if saved_path:
+            self.images_saved += 1
+            logger.info(f"\n📷 Face image saved: {saved_path}")
             
-            # Save aligned face and generate embedding
-            self._process_aligned_face(detection)
+        # Save aligned face and generate embedding
+        self._process_aligned_face(detection)
     
     def _process_aligned_face(self, detection: Dict[str, Any]) -> None:
         """Process aligned face and generate embedding."""

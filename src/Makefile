@@ -44,6 +44,11 @@ LIBS:= `pkg-config --libs $(PKGS)`
 LIBS+= -L$(LIB_INSTALL_DIR) -lnvdsgst_meta -lnvds_meta -lnvdsgst_helper -lnvbufsurftransform -lnvbufsurface -L/usr/local/cuda-$(CUDA_VER)/lib64/ -lcudart \
        -lcuda -Wl,-rpath,$(LIB_INSTALL_DIR) $(KAFKA_LIBS) -lm -ljpeg
 
+LOG?=
+ifeq ($(LOG),)
+	LOG=3
+endif
+
 all: $(APP)
 
 %.o: %.c $(INCS) Makefile
@@ -60,14 +65,14 @@ clean_images:
 	- rm -r /app/outputs/faces/*
 
 run: clean_images $(APP)
-	GST_DEBUG=deepstream:4 ./$(APP) --config /app/configs/app.ini \
+	GST_DEBUG=deepstream:$(LOG) ./$(APP) --config /app/configs/app.ini \
 	-s file:///app/videos/faces_tracking.mp4
 
 run2: clean_images $(APP)
-	GST_DEBUG=deepstream:4 ./$(APP) --config /app/configs/app_multi.ini
+	GST_DEBUG=deepstream:$(LOG) ./$(APP) --config /app/configs/app_multi.ini
 
 run1: clean_images $(APP)
-	GST_DEBUG=deepstream:4 ./$(APP) -s file:///app/videos/faces_tracking.mp4  \
+	GST_DEBUG=deepstream:$(LOG) ./$(APP) -s file:///app/videos/faces_tracking.mp4  \
 	   	-c /app/configs/config_infer_primary_yoloV8_face.txt  \
 		--kafka-broker kafka:29092  --kafka-topic face-detections
 
