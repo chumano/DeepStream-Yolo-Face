@@ -2,29 +2,11 @@
 #include <jpeglib.h>
 #include <setjmp.h>
 #include "nvbufsurftransform.h"
+#include "config.h"
 
 GST_DEBUG_CATEGORY_STATIC(deepstream_debug_category);
 #define GST_CAT_DEFAULT deepstream_debug_category
 
-GOptionEntry entries[] = {
-  {"source", 's', 0, G_OPTION_ARG_STRING_ARRAY, &SOURCES, "Source streams/files (can specify multiple -s)", NULL},
- // {"source", 's', 0, G_OPTION_ARG_STRING, &SOURCE, "Source stream/file", NULL},
-  {"infer-config", 'c', 0, G_OPTION_ARG_STRING, &INFER_CONFIG, "Config infer file", NULL},
-  {"streammux-batch-size", 'b', 0, G_OPTION_ARG_INT, &STREAMMUX_BATCH_SIZE, "Streammux batch-size (default 1)", NULL},
-  {"streammux-width", 'w', 0, G_OPTION_ARG_INT, &STREAMMUX_WIDTH, "Streammux width (default 1920)", NULL},
-  {"streammux-height", 'e', 0, G_OPTION_ARG_INT, &STREAMMUX_HEIGHT, "Streammux height (default 1080)", NULL},
-  {"gpu-id", 'g', 0, G_OPTION_ARG_INT, &GPU_ID, "GPU id (default 0)", NULL},
-  {"kafka-broker", 'k', 0, G_OPTION_ARG_STRING, &KAFKA_BROKER, "Kafka broker address (e.g., localhost:9092)", NULL},
-  {"kafka-topic", 't', 0, G_OPTION_ARG_STRING, &KAFKA_TOPIC, "Kafka topic name (default: face-detections)", NULL},
-  {"kafka-delay", 'd', 0, G_OPTION_ARG_DOUBLE, &KAFKA_SEND_DELAY_SEC, "Delay in seconds before sending to Kafka (default: 2.0)", NULL},
-  {"kafka-quality-threshold", 'q', 0, G_OPTION_ARG_DOUBLE, &KAFKA_QUALITY_IMPROVEMENT_THRESHOLD, "Minimum quality improvement to resend (default: 0.005)", NULL},
-  {"disable-crop-image", 0, G_OPTION_FLAG_REVERSE, G_OPTION_ARG_NONE, &ENABLE_CROP_IMAGE, "Disable crop image in Kafka JSON", NULL},
-  {"disable-display", 0, 0, G_OPTION_ARG_NONE, &DISABLE_DISPLAY, "Disable video display output", NULL},
-  {"enable-frame-save", 0, 0, G_OPTION_ARG_NONE, &ENABLE_FRAME_SAVE, "Enable saving frames to disk", NULL},
-  {"frame-save-dir", 0, 0, G_OPTION_ARG_STRING, &FRAME_SAVE_DIR, "Directory to save frames (default: ./outputs/frames)", NULL},
-  {"frame-save-quality", 0, 0, G_OPTION_ARG_INT, &FRAME_SAVE_QUALITY, "JPEG quality 0-100 (default: 85)", NULL},
-  {NULL}
-};
 
 // =============================================================================
 // Utility Functions
@@ -1989,46 +1971,58 @@ main(gint argc, char *argv[])
   gst_init(&argc, &argv);
   GST_DEBUG_CATEGORY_INIT(deepstream_debug_category, "deepstream", 0, "DeepStream Face App");
 
-  GOptionContext *ctx = g_option_context_new("DeepStream");
-  GOptionGroup *group = g_option_group_new("deepstream", NULL, NULL, NULL, NULL);
-  GError *error = NULL;
-  g_option_group_add_entries(group, entries);
-  g_option_context_set_main_group(ctx, group);
-  g_option_context_add_group(ctx, gst_init_get_option_group());
-  if (!g_option_context_parse(ctx, &argc, &argv, &error)) {
-    g_option_context_free(ctx);
-    g_printerr("ERROR - %s\n", error->message);
-    g_error_free(error);
+  // ============================================================================
+  // Parse command-line options
+  if (!parse_command_line(argc, argv)) {
+    g_printerr("ERROR - Failed to parse command-line options\n");
     return -1;
   }
-  g_option_context_free(ctx);
+  
 
-  // if (!SOURCE) {
-  //   g_printerr("ERROR - Source not found\n");
-  //   return -1;
-  // }
-  NUM_SOURCES = g_strv_length(SOURCES);
-
-  if (NUM_SOURCES == 0) {
-    g_printerr("ERROR - No sources provided\n");
-    return -1;
+  //================================================
+  GST_INFO("\n");
+  // Debug: Print what was actually parsed
+  GST_INFO("DEBUG - After parsing:\n");
+  //GST_INFO("SOURCE: %s", SOURCE);
+  GST_INFO("  NUM_SOURCES: %d", NUM_SOURCES);
+  if (SOURCES) {
+    for (guint i = 0; i < NUM_SOURCES; i++) {
+      GST_INFO("  SOURCES[%d]: %s", i, SOURCES[i]);
+    }
+  } else {
+    GST_INFO("  SOURCES: (null)");
   }
-
-  if (STREAMMUX_BATCH_SIZE < NUM_SOURCES) {
-    STREAMMUX_BATCH_SIZE = NUM_SOURCES;
-    g_print("Setting batch-size to %d to match number of sources\n", STREAMMUX_BATCH_SIZE);
+  GST_INFO("INFER_CONFIG: %s", INFER_CONFIG);
+  GST_INFO("STREAMMUX_BATCH_SIZE: %d", STREAMMUX_BATCH_SIZE);
+  GST_INFO("STREAMMUX_WIDTH: %d", STREAMMUX_WIDTH);
+  GST_INFO("STREAMMUX_HEIGHT: %d", STREAMMUX_HEIGHT);
+  GST_INFO("GPU_ID: %d", GPU_ID);
+  GST_INFO("PERF_MEASUREMENT_INTERVAL_SEC: %d", PERF_MEASUREMENT_INTERVAL_SEC);
+  GST_INFO("JETSON: %s", JETSON ? "TRUE" : "FALSE");
+  if (KAFKA_ENABLED) {
+    GST_INFO("KAFKA_BROKER: %s", KAFKA_BROKER);
+    GST_INFO("KAFKA_TOPIC: %s", KAFKA_TOPIC);
+    GST_INFO("KAFKA_SEND_DELAY_SEC: %.1f", KAFKA_SEND_DELAY_SEC);
+    GST_INFO("KAFKA_QUALITY_IMPROVEMENT_THRESHOLD: %.2f", KAFKA_QUALITY_IMPROVEMENT_THRESHOLD);
   }
-
-
-  if (!INFER_CONFIG) {
-    g_printerr("ERROR - Config infer not found\n");
-    return -1;
+  GST_INFO("ENABLE_CROP_IMAGE: %s", ENABLE_CROP_IMAGE ? "TRUE" : "FALSE");
+  if (ENABLE_FRAME_SAVE) {
+    GST_INFO("FRAME_SAVE_DIR: %s", FRAME_SAVE_DIR);
+    GST_INFO("FRAME_SAVE_QUALITY: %u", FRAME_SAVE_QUALITY);
   }
+  GST_INFO("\n");
 
+  // wait user to press enter key to start
+  if (WAIT_FOR_USER_INPUT) {
+    g_print("Press ENTER to start processing ...\n");
+    getchar();
+  }
+ 
+  // ============================================================================
   // Initialize frame save directory if enabled
   if (ENABLE_FRAME_SAVE) {
     if (!FRAME_SAVE_DIR) {
-      FRAME_SAVE_DIR = g_strdup("./outputs/frames");
+      FRAME_SAVE_DIR = g_strdup("/app/outputs/frames");
     }
     
     if (!ensure_frame_save_directory(FRAME_SAVE_DIR)) {
@@ -2039,6 +2033,7 @@ main(gint argc, char *argv[])
     GST_INFO("Frame saving enabled: dir=%s, quality=%u", 
             FRAME_SAVE_DIR, FRAME_SAVE_QUALITY);
   }
+  // ============================================================================
 
   gint current_device = -1;
   cudaGetDevice(&current_device);
@@ -2050,15 +2045,9 @@ main(gint argc, char *argv[])
     JETSON = TRUE;
   }
 
-  // Check if Kafka is enabled
-  if (KAFKA_BROKER) {
-    KAFKA_ENABLED = TRUE;
-    if (!KAFKA_TOPIC) {
-      KAFKA_TOPIC = g_strdup("face-detections");
-    }
-  }
-
+  // ============================================================================
   // Initialize detection manager
+  GST_INFO("Initializing detection manager...");
   init_detection_manager();
 
   GMainLoop *loop = g_main_loop_new(NULL, FALSE);
@@ -2071,6 +2060,9 @@ main(gint argc, char *argv[])
     g_timeout_add(500, detection_manager_process_pending_callback, NULL);
   }
 
+  // ============================================================================
+  // Create GStreamer pipeline
+  GST_INFO("Creating GStreamer pipeline...");
   GstElement *pipeline = gst_pipeline_new("deepstream");
   if (!pipeline) {
     g_printerr("ERROR - Failed to create pipeline\n");
@@ -2211,36 +2203,7 @@ main(gint argc, char *argv[])
   // Connect callback to appsink
   g_signal_connect(appsink, "new-sample", G_CALLBACK(appsink_new_sample_callback), NULL);
 
-  //================================================
-  GST_DEBUG("\n");
-  //GST_DEBUG("SOURCE: %s", SOURCE);
-  GST_DEBUG("NUM_SOURCES: %d", NUM_SOURCES);
-  GST_DEBUG("INFER_CONFIG: %s", INFER_CONFIG);
-  GST_DEBUG("STREAMMUX_BATCH_SIZE: %d", STREAMMUX_BATCH_SIZE);
-  GST_DEBUG("STREAMMUX_WIDTH: %d", STREAMMUX_WIDTH);
-  GST_DEBUG("STREAMMUX_HEIGHT: %d", STREAMMUX_HEIGHT);
-  GST_DEBUG("GPU_ID: %d", GPU_ID);
-  GST_DEBUG("PERF_MEASUREMENT_INTERVAL_SEC: %d", PERF_MEASUREMENT_INTERVAL_SEC);
-  GST_DEBUG("JETSON: %s", JETSON ? "TRUE" : "FALSE");
-  if (KAFKA_ENABLED) {
-    GST_DEBUG("KAFKA_BROKER: %s", KAFKA_BROKER);
-    GST_DEBUG("KAFKA_TOPIC: %s", KAFKA_TOPIC);
-    GST_DEBUG("KAFKA_SEND_DELAY_SEC: %.1f", KAFKA_SEND_DELAY_SEC);
-    GST_DEBUG("KAFKA_QUALITY_IMPROVEMENT_THRESHOLD: %.2f", KAFKA_QUALITY_IMPROVEMENT_THRESHOLD);
-  }
-  GST_DEBUG("ENABLE_CROP_IMAGE: %s", ENABLE_CROP_IMAGE ? "TRUE" : "FALSE");
-  if (ENABLE_FRAME_SAVE) {
-    GST_DEBUG("FRAME_SAVE_DIR: %s", FRAME_SAVE_DIR);
-    GST_DEBUG("FRAME_SAVE_QUALITY: %u", FRAME_SAVE_QUALITY);
-  }
-  GST_DEBUG("\n");
-
-  // wait user to press enter key to start
-  if (WAIT_FOR_USER_INPUT) {
-    g_print("Press ENTER to start processing ...\n");
-    getchar();
-  }
-
+  
   GstCaps *caps = gst_caps_from_string("video/x-raw(memory:NVMM), format=RGBA");
   g_object_set(G_OBJECT(capsfilter), "caps", caps, NULL);
   gst_caps_unref(caps);

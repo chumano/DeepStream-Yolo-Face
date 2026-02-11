@@ -18,55 +18,6 @@
 #include <librdkafka/rdkafka.h>
 #endif
 
-// Basic settings
-//static gchar *SOURCE = NULL;
-static gchar **SOURCES = NULL;  // Array of source URIs
-static guint NUM_SOURCES = 0;
-
-static gchar *INFER_CONFIG = NULL;
-static guint STREAMMUX_BATCH_SIZE = 1;
-static guint STREAMMUX_WIDTH = 1920;
-static guint STREAMMUX_HEIGHT = 1080;
-static guint GPU_ID = 0;
-
-static guint PERF_MEASUREMENT_INTERVAL_SEC = 5;
-static gboolean JETSON = FALSE;
-
-// Kafka settings
-static gchar *KAFKA_BROKER = NULL;
-static gchar *KAFKA_TOPIC = NULL;
-static gboolean KAFKA_ENABLED = FALSE;
-static gdouble KAFKA_SEND_DELAY_SEC = 2.0;
-static gdouble KAFKA_QUALITY_IMPROVEMENT_THRESHOLD = 0.005;
-static gdouble KAFKA_SENT_RECORD_TTL_SEC = 60.0;
-static gdouble KAFKA_PENDING_TTL_SEC = 10.0;
-static gdouble KAFKA_CLEANUP_INTERVAL_SEC = 30.0;
-
-// Face quality thresholds
-static gdouble MIN_LANDMARK_CONFIDENCE = 0.5;
-static guint MIN_VISIBLE_LANDMARKS = 3;
-static gdouble FACE_QUALITY_THRESHOLD = 0.6;
-//static gdouble MAX_HEAD_ROTATION_ANGLE = 25.0;
-static gdouble MIN_FRONTAL_SCORE = 0.7;
-
-// Crop image support
-static gboolean ENABLE_CROP_IMAGE = TRUE;
-
-// Display settings
-static gboolean DISABLE_DISPLAY = FALSE;
-
-// Frame saving settings
-static gboolean ENABLE_FRAME_SAVE = TRUE;
-static gchar *FRAME_SAVE_DIR = NULL;
-static guint FRAME_SAVE_QUALITY = 70; // JPEG quality (0-100)
-
-static int MAX_DISPLAY_LEN = 128;
-static int NTP_TEXT_X_OFFSET = 30;
-static int NTP_TEXT_Y_OFFSET = 30;
-static int NTP_TEXT_FONT_SIZE = 20;
-
-static gboolean WAIT_FOR_USER_INPUT = TRUE;
-
 // =============================================================================
 // Detection Manager Structures
 // =============================================================================

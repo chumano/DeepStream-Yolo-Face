@@ -31,6 +31,8 @@ python3 deepstream.py -s "rtsp://admin:dt%4012345@192.168.1.203:554/cam/realmoni
 # or C app
 rm outputs/frames/*
 
+./deepstream --config /app/configs/app.ini --disable-display
+
 ./deepstream \
     -s file:///app/videos/friends_short.mp4 \
     -c /app/configs/config_infer_primary_yoloV8_face.txt

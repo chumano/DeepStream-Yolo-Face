@@ -56,10 +56,17 @@ clean: clean_images
 	rm -rf $(OBJS) $(APP)
 
 clean_images:
-	- rm -r ./outputs/frames/*
-	- rm -r ./outputs/faces/*
+	- rm -r /app/outputs/frames/*
+	- rm -r /app/outputs/faces/*
 
 run: clean_images $(APP)
+	GST_DEBUG=deepstream:4 ./$(APP) --config /app/configs/app.ini \
+	-s file:///app/videos/faces_tracking.mp4
+
+run2: clean_images $(APP)
+	GST_DEBUG=deepstream:4 ./$(APP) --config /app/configs/app_multi.ini
+
+run1: clean_images $(APP)
 	GST_DEBUG=deepstream:4 ./$(APP) -s file:///app/videos/faces_tracking.mp4  \
 	   	-c /app/configs/config_infer_primary_yoloV8_face.txt  \
 		--kafka-broker kafka:29092  --kafka-topic face-detections
