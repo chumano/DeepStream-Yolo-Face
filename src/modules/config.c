@@ -261,3 +261,37 @@ gint parse_command_line(gint argc, char *argv[])
   g_printf("Command line options parsed successfully\n");
   return 1;
 }
+
+void config_free()
+{
+  // Free allocated global variables
+  if (CONFIG_FILE) {
+    g_free(CONFIG_FILE);
+    CONFIG_FILE = NULL;
+  }
+  // if (SOURCE) {
+  //   g_free(SOURCE);
+  //   SOURCE = NULL;
+  // }
+  if (SOURCES) {
+    g_strfreev(SOURCES);
+    SOURCES = NULL;
+    NUM_SOURCES = 0;
+  }
+  if (INFER_CONFIG) {
+    g_free(INFER_CONFIG);
+    INFER_CONFIG = NULL;
+  }
+  if (KAFKA_BROKER) {
+    g_free(KAFKA_BROKER);
+    KAFKA_BROKER = NULL;
+  }
+  if (KAFKA_TOPIC) {
+    g_free(KAFKA_TOPIC);
+    KAFKA_TOPIC = NULL;
+  }
+  if (FRAME_SAVE_DIR) {
+    g_free(FRAME_SAVE_DIR);
+    FRAME_SAVE_DIR = NULL;
+  }
+}

@@ -58,4 +58,6 @@ gboolean
 parse_config_file(const gchar *config_file, GError **error);
 
 gint parse_command_line(gint argc, char *argv[]);
+
+void config_free();
 #endif // __CONFIG_H__

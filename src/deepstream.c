@@ -290,82 +290,6 @@ nvosd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_da
   return GST_PAD_PROBE_OK;
 }
 
-static void
-uridecodebin_child_added_callback(GstChildProxy *child_proxy, GObject *object, gchar *name, gpointer user_data)
-{
-  if (g_strrstr(name, "decodebin")) {
-    g_signal_connect(object, "child-added", G_CALLBACK(uridecodebin_child_added_callback), user_data);
-  }
-  else if (g_strrstr(name, "nvv4l2decoder")) {
-    g_object_set(object, "drop-frame-interval", 0, "num-extra-surfaces", 1, "qos", 0, NULL);
-    if (JETSON) {
-      g_object_set(object, "enable-max-performance", 1, NULL);
-    }
-    else {
-      g_object_set(object, "cudadec-memtype", 0, "gpu-id", GPU_ID, NULL);
-    }
-  }
-}
-
-static void
-uridecodebin_pad_added_callback(GstElement *decodebin, GstPad *pad, gpointer user_data)
-{
-  GstPad *nvstreammux_sink_pad = (GstPad *) user_data;
-
-  GstCaps *caps = gst_pad_get_current_caps(pad);
-  if (!caps) {
-    caps = gst_pad_query_caps(pad, NULL);
-  }
-
-  const GstStructure *str = gst_caps_get_structure(caps, 0);
-  const gchar *name = gst_structure_get_name(str);
-  GstCapsFeatures *features = gst_caps_get_features(caps, 0);
-
-  if (!strncmp(name, "video", 5)) {
-    if (gst_caps_features_contains(features, "memory:NVMM")) {
-      if (gst_pad_link(pad, nvstreammux_sink_pad) != GST_PAD_LINK_OK) {
-        GST_ERROR("Failed to link source to nvstreammux sink pad");
-      }
-    }
-    else {
-      GST_ERROR("decodebin did not pick NVIDIA decoder plugin");
-    }
-  }
-
-  gst_caps_unref(caps);
-}
-
-static GstElement *
-create_uridecodebin(guint stream_id, const gchar *uri, GstElement *nvstreammux)
-{
-  gchar bin_name[32] = { };
-  g_snprintf(bin_name, 32, "source-bin-%04d", stream_id);
-
-  GstElement *uridecodebin = gst_element_factory_make("uridecodebin", bin_name);
-
-  if (g_strrstr(uri, "rtsp://")) {
-    configure_source_for_ntp_sync(uridecodebin);
-  }
-
-  g_object_set(G_OBJECT(uridecodebin), "uri", uri, NULL);
-
-  gchar pad_name[16];
-  g_snprintf(pad_name, 16, "sink_%u", stream_id);
-
-  GstPad *nvstreammux_sink_pad = gst_element_get_request_pad(nvstreammux, pad_name);
-  if (!nvstreammux_sink_pad) {
-    GST_ERROR("Failed to get nvstreammux %s pad", pad_name);
-    return NULL;
-  }
-
-  g_signal_connect(G_OBJECT(uridecodebin), "pad-added", G_CALLBACK(uridecodebin_pad_added_callback),
-      nvstreammux_sink_pad);
-  g_signal_connect(G_OBJECT(uridecodebin), "child-added", G_CALLBACK(uridecodebin_child_added_callback), NULL);
-
-  gst_object_unref(nvstreammux_sink_pad);
-
-  return uridecodebin;
-}
 
 static gboolean
 bus_call(GstBus *bus, GstMessage *message, gpointer user_data)
@@ -514,6 +438,86 @@ appsink_new_sample_callback(GstElement *appsink, gpointer user_data)
   gst_sample_unref(sample);
   
   return GST_FLOW_OK;
+}
+
+// =============================================================================
+// Source Bin Creation
+// =============================================================================
+static void
+uridecodebin_child_added_callback(GstChildProxy *child_proxy, GObject *object, gchar *name, gpointer user_data)
+{
+  if (g_strrstr(name, "decodebin")) {
+    g_signal_connect(object, "child-added", G_CALLBACK(uridecodebin_child_added_callback), user_data);
+  }
+  else if (g_strrstr(name, "nvv4l2decoder")) {
+    g_object_set(object, "drop-frame-interval", 0, "num-extra-surfaces", 1, "qos", 0, NULL);
+    if (JETSON) {
+      g_object_set(object, "enable-max-performance", 1, NULL);
+    }
+    else {
+      g_object_set(object, "cudadec-memtype", 0, "gpu-id", GPU_ID, NULL);
+    }
+  }
+}
+
+static void
+uridecodebin_pad_added_callback(GstElement *decodebin, GstPad *pad, gpointer user_data)
+{
+  GstPad *nvstreammux_sink_pad = (GstPad *) user_data;
+
+  GstCaps *caps = gst_pad_get_current_caps(pad);
+  if (!caps) {
+    caps = gst_pad_query_caps(pad, NULL);
+  }
+
+  const GstStructure *str = gst_caps_get_structure(caps, 0);
+  const gchar *name = gst_structure_get_name(str);
+  GstCapsFeatures *features = gst_caps_get_features(caps, 0);
+
+  if (!strncmp(name, "video", 5)) {
+    if (gst_caps_features_contains(features, "memory:NVMM")) {
+      if (gst_pad_link(pad, nvstreammux_sink_pad) != GST_PAD_LINK_OK) {
+        GST_ERROR("Failed to link source to nvstreammux sink pad");
+      }
+    }
+    else {
+      GST_ERROR("decodebin did not pick NVIDIA decoder plugin");
+    }
+  }
+
+  gst_caps_unref(caps);
+}
+
+static GstElement *
+create_uridecodebin(guint stream_id, const gchar *uri, GstElement *nvstreammux)
+{
+  gchar bin_name[32] = { };
+  g_snprintf(bin_name, 32, "source-bin-%04d", stream_id);
+
+  GstElement *uridecodebin = gst_element_factory_make("uridecodebin", bin_name);
+
+  if (g_strrstr(uri, "rtsp://")) {
+    configure_source_for_ntp_sync(uridecodebin);
+  }
+
+  g_object_set(G_OBJECT(uridecodebin), "uri", uri, NULL);
+
+  gchar pad_name[16];
+  g_snprintf(pad_name, 16, "sink_%u", stream_id);
+
+  GstPad *nvstreammux_sink_pad = gst_element_get_request_pad(nvstreammux, pad_name);
+  if (!nvstreammux_sink_pad) {
+    GST_ERROR("Failed to get nvstreammux %s pad", pad_name);
+    return NULL;
+  }
+
+  g_signal_connect(G_OBJECT(uridecodebin), "pad-added", G_CALLBACK(uridecodebin_pad_added_callback),
+      nvstreammux_sink_pad);
+  g_signal_connect(G_OBJECT(uridecodebin), "child-added", G_CALLBACK(uridecodebin_child_added_callback), NULL);
+
+  gst_object_unref(nvstreammux_sink_pad);
+
+  return uridecodebin;
 }
 
 // =============================================================================
@@ -918,6 +922,8 @@ main(gint argc, char *argv[])
   enable_perf_measurement(perf_struct, perf_pad, NUM_SOURCES, PERF_MEASUREMENT_INTERVAL_SEC, 0, perf_cb);
 
   // ===============================================
+  // Start the pipeline
+  GST_INFO("Starting GStreamer pipeline...\n");
   gst_element_set_state(pipeline, GST_STATE_PAUSED);
 
   if (gst_element_set_state(pipeline, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
@@ -931,35 +937,13 @@ main(gint argc, char *argv[])
 
   gst_element_set_state(pipeline, GST_STATE_NULL);
 
+  // ===============================================
   // Cleanup detection manager
   cleanup_detection_manager();
 
   g_free(perf_struct);
 
-  // if (SOURCE) {
-  //   g_free(SOURCE);
-  // }
-  if (SOURCES) {
-    g_strfreev(SOURCES);  // Frees array and all strings
-  }
-
-
-  if (INFER_CONFIG) {
-    g_free(INFER_CONFIG);
-  }
-
-  if (KAFKA_BROKER) {
-    g_free(KAFKA_BROKER);
-  }
-
-  if (KAFKA_TOPIC) {
-    g_free(KAFKA_TOPIC);
-  }
-
-  if (FRAME_SAVE_DIR) {
-    g_free(FRAME_SAVE_DIR);
-  }
-
+  config_free();
   gst_object_unref(GST_OBJECT(pipeline));
   g_source_remove(bus_watch_id);
   g_main_loop_unref(loop);
