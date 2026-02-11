@@ -1,5 +1,5 @@
-#ifndef CONFIG_H
-#define CONFIG_H
+#ifndef __CONFIG_H__
+#define __CONFIG_H__
 #include <nvdsgstutils.h>
 
 extern gchar *CONFIG_FILE;
@@ -58,4 +58,4 @@ gboolean
 parse_config_file(const gchar *config_file, GError **error);
 
 gint parse_command_line(gint argc, char *argv[]);
-#endif // CONFIG_H
+#endif // __CONFIG_H__
