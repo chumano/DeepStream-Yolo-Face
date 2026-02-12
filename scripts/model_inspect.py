@@ -1,12 +1,14 @@
 
 import onnx
+import sys
 from onnx import checker
 
-# Usage: python scripts/model_inspect.py
-
+# Usage: python scripts/model_inspect.py [model_path]
+# python scripts/model_inspect.py ./model-repo/traffic/model.onnx
 print("onnx version:", onnx.__version__)
 
-m = onnx.load("./models/yolov8n-face.onnx")
+model_path = sys.argv[1] if len(sys.argv) > 1 else "./models/yolov8n-face.onnx"
+m = onnx.load(model_path)
 
 print("\nInitializers (name -> shape):")
 for init in m.graph.initializer:
@@ -35,7 +37,11 @@ for o in m.graph.output:
     print(f"  {o.name}: {shape}")
 
 # Check if the converted ONNX protobuf is valid
-checker.check_graph(m.graph)
+try:
+    checker.check_graph(m.graph)
+except Exception as e:
+    print("ONNX model validation failed:", e)
+    
 
 # print opset version
 print("ONNX model opset version:", m.opset_import[0].version)

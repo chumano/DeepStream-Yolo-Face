@@ -1,5 +1,11 @@
 # Using Triton Inference Server with YOLO ONNX Model
 
+Container Version: `nvcr.io/nvidia/tritonserver:24.12-py3`
+Triton Inference Server Version: 2.53
+
+https://docs.nvidia.com/deeplearning/triton-inference-server/archives/
+triton-inference-server-2500/user-guide/docs/user_guide/performance_tuning.html
+
 ## Prepare the Model Repository
 
 Place your ONNX model and the `config.pbtxt` file in the following structure:
@@ -28,13 +34,14 @@ curl -v localhost:8000/v2/health/ready
 ### Example
 Install the Triton client library if you haven't already:
 ```bash
-pip install tritonclient[http]
+wsl
+source .venv/bin/activate
+
+pip install tritonclient[http]==2.65.0
 # or for gRPC
-pip install tritonclient[grpc]
-# or for shared memory
-pip install tritonclient[shared_memory]
+pip install tritonclient[grpc]==2.65.0
 # or for all protocols
-pip install tritonclient[all]
+pip install tritonclient[all]==2.65.0
 ```
 
 You can use the Triton Python client:
@@ -54,6 +61,7 @@ print(result.shape)
 ```
 
 ## References
-
+- [Release Notes for Triton Inference Server](https://docs.nvidia.com/deeplearning/triton-inference-server/release-notes/rel-25-05.html)
+- [Triton Server Container](https://catalog.ngc.nvidia.com/orgs/nvidia/containers/tritonserver/tags?version=25.12-py3)
 - [Triton Inference Server Documentation](https://github.com/triton-inference-server/server)
 - [Triton Python Client](https://github.com/triton-inference-server/client)

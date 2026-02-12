@@ -75,7 +75,7 @@ services:
     command: []
 
   triton:
-    image: nvcr.io/nvidia/tritonserver:26.01-py3
+    image: nvcr.io/nvidia/tritonserver:24.12-py3 #25.12-py3 #26.01-py3
     container_name: ds-triton
     profiles:
       - dev
@@ -85,16 +85,17 @@ services:
       - "8001:8001"  # gRPC
       - "8002:8002"  # Metrics
     volumes:
-      - ./model-repo:/models:ro
+      - ./model-repo:/models
       - ./triton:/app
     command: [
       "tritonserver",
       "--model-repository=/models",
       "--log-verbose=1"
     ]
+    #command: ["tail", "-f", "/dev/null"]
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - NVIDIA_DRIVER_CAPABILITIES=all
     healthcheck:
       test: ["CMD", "curl -f http://localhost:8000/v2/health/ready || exit 1"]
       interval: 30s
@@ -102,11 +103,6 @@ services:
       retries: 3
     networks:
       - deepstream-network
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - capabilities: [gpu]
 
   zookeeper:
     image: confluentinc/cp-zookeeper:latest
