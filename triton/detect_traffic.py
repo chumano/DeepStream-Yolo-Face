@@ -2,6 +2,7 @@ import numpy as np
 import tritonclient.http as httpclient
 from PIL import Image, ImageDraw, ImageFont
 import sys
+import time
 
 # Usage: python triton/detect_traffic.py [image_path]
 default_image_path = "images/traffic.jpg"
@@ -95,8 +96,11 @@ if __name__ == "__main__":
     image_path = sys.argv[1] if len(sys.argv) > 1 else default_image_path
     # Model expects (1, 3, 640, 640)
     input_shape = (1, 3, 640, 640)
+
+    t0 = time.time()
     orig_img, input_data = preprocess_image(image_path, input_shape)
     orig_width, orig_height = orig_img.size
+    t1 = time.time()
 
     client = httpclient.InferenceServerClient(url="localhost:8000")
     inputs = [httpclient.InferInput("images", input_data.shape, "FP32")]
@@ -109,7 +113,9 @@ if __name__ == "__main__":
         httpclient.InferRequestedOutput("det_classes"),
     ]
 
+    t2 = time.time()
     response = client.infer("traffic", inputs=inputs, outputs=outputs)
+    t3 = time.time()
 
     num_dets = response.as_numpy("num_dets")
     det_boxes = response.as_numpy("det_boxes")
@@ -122,6 +128,7 @@ if __name__ == "__main__":
     print("det_classes shape:", det_classes.shape)
 
     # Parse detections
+    t4 = time.time()
     objects = parse_outputs(
         num_dets,
         det_boxes,
@@ -133,9 +140,15 @@ if __name__ == "__main__":
         orig_width=orig_width,
         orig_height=orig_height
     )
+    t5 = time.time()
 
     # Draw and save output
     annotated_img = draw_annotations(orig_img, objects)
     output_path = image_path.replace(".jpg", "_annotated.jpg")
     annotated_img.save(output_path)
     print(f"Saved annotated image to {output_path}")
+
+    print(f"Preprocessing time: {t1-t0:.4f} s")
+    print(f"Inference setup time: {t2-t1:.4f} s")
+    print(f"Inference time: {t3-t2:.4f} s")
+    print(f"Postprocessing time: {t5-t4:.4f} s")
