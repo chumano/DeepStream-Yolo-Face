@@ -74,12 +74,49 @@ services:
     entrypoint: ["tail", "-f", "/dev/null"]
     command: []
 
+  triton:
+    image: nvcr.io/nvidia/tritonserver:26.01-py3
+    container_name: ds-triton
+    profiles:
+      - dev
+    runtime: nvidia
+    ports:
+      - "8000:8000"  # HTTP
+      - "8001:8001"  # gRPC
+      - "8002:8002"  # Metrics
+    volumes:
+      - ./model-repo:/models:ro
+      - ./triton:/app
+    command: [
+      "tritonserver",
+      "--model-repository=/models",
+      "--log-verbose=1"
+    ]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    healthcheck:
+      test: ["CMD", "curl -f http://localhost:8000/v2/health/ready || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - deepstream-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+
   zookeeper:
     image: confluentinc/cp-zookeeper:latest
     container_name: ds-zookeeper
+    profiles:
+      - dev
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
+    
     # ports:
     #   - "2181:2181"
     networks:
@@ -88,6 +125,8 @@ services:
   kafka:
     image: confluentinc/cp-kafka:7.5.0
     container_name: ds-kafka
+    profiles:
+      - dev
     depends_on:
       - zookeeper
     ports:
