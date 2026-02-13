@@ -93,7 +93,9 @@ RUN make -C nvdsinfer_custom_impl_Yolo_face clean && \
 
 # Copy remaining project files
 COPY configs/config_infer_primary_*.txt configs/labels.txt ./
-COPY src/deepstream.* ./
+COPY src/*.c ./
+COPY src/*.h ./
+COPY src/*.py ./
 COPY src/modules/ ./modules/
 
 # Build the main application

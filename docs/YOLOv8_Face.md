@@ -15,7 +15,7 @@ pip install torch --dry-run --report -
 curl -s https://pypi.org/pypi/torch/json
 
 ```bash
-git clone https://github.com/chumano/yolov8-face.git
+git clone https://github.com/chumano/yolo-face.git yolov8-face
 cd yolov8-face
 pip3 install -r requirements.txt
 python3 setup.py install

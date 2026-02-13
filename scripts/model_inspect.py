@@ -5,6 +5,8 @@ from onnx import checker
 
 # Usage: python scripts/model_inspect.py [model_path]
 # python scripts/model_inspect.py ./model-repo/traffic/model.onnx
+# python scripts/model_inspect.py ./models/yolov8n-face.onnx
+# python scripts/model_inspect.py ./models/yolov8n-face-nms.onnx
 print("onnx version:", onnx.__version__)
 
 model_path = sys.argv[1] if len(sys.argv) > 1 else "./models/yolov8n-face.onnx"

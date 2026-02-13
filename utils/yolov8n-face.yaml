@@ -1,0 +1,50 @@
+nc: 1 # number of classes (số lượng lớp, ở đây là 1 lớp: face)
+ch: 3 # input channels (số kênh đầu vào, thường là ảnh RGB)
+
+kpt_shape: [5, 3] # keypoint shape (số lượng keypoints và số chiều cho mỗi keypoint, ở đây là 5 điểm, mỗi điểm có 3 giá trị)
+# 5 points (eyes, nose, mouth corners)
+# 3 values per point (x, y, confidence)
+
+scale: n # model scale (quy mô mô hình, n là nhỏ nhất)
+scales:
+  l: [1.0, 1.0, 512]   # large
+  m: [0.67, 0.75, 768] # medium
+  n: [0.33, 0.25, 1024] # nano
+  s: [0.33, 0.5, 1024] # small
+  x: [1.0, 1.25, 512]  # extra large
+yaml_file: yolov8n-pose.yaml # tên file cấu hình gốc
+
+backbone:
+  # backbone: các lớp trích xuất đặc trưng ban đầu
+  - [ -1, 1, Conv, [64, 3, 2] ]      # Conv: convolution, 64 filters, kernel 3x3, stride 2
+  - [ -1, 1, Conv, [128, 3, 2] ]
+  - [ -1, 3, C2f, [128, true] ]      # C2f: Cross Stage Partial, 3 lần lặp, 128 filters, true: shortcut
+  - [ -1, 1, Conv, [256, 3, 2] ]
+  - [ -1, 6, C2f, [256, true] ]
+  - [ -1, 1, Conv, [512, 3, 2] ]
+  - [ -1, 6, C2f, [512, true] ]
+  - [ -1, 1, Conv, [1024, 3, 2] ]
+  - [ -1, 3, C2f, [1024, true] ]
+  - [ -1, 1, SPPF, [1024, 5] ]       # SPPF: Spatial Pyramid Pooling Fast, 1024 filters, kernel 5
+
+head:
+  # head: các lớp dự đoán đầu ra (upsample, concat, pose)
+  - [ -1, 1, nn.Upsample, [None, 2, nearest] ] # Upsample: phóng to đặc trưng
+  - [ [-1, 6], 1, Concat, [1] ]                # Concat: nối đặc trưng từ các lớp
+  - [ -1, 3, C2f, [512] ]
+
+  - [ -1, 1, nn.Upsample, [None, 2, nearest] ]
+  - [ [-1, 4], 1, Concat, [1] ]
+  - [ -1, 3, C2f, [256] ]
+
+  - [ -1, 1, Conv, [256, 3, 2] ]
+  - [ [-1, 12], 1, Concat, [1] ]
+  - [ -1, 3, C2f, [512] ]
+
+  - [ -1, 1, Conv, [512, 3, 2] ]
+  - [ [-1, 9], 1, Concat, [1] ]
+  - [ -1, 3, C2f, [1024] ]
+  
+  - [ [15, 18, 21], 1, Pose, [nc, kpt_shape] ] # Pose: lớp dự đoán keypoint
+
+
