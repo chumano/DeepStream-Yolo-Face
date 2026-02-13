@@ -30,3 +30,9 @@
 - [ ] storage face embeddings to Qdrant
 - [ ] streaming with mjpeg 
 - [ ] consumer with rule engine
+
+## Model conversion
+- [ ] add NMS to onnx model https://github.com/triple-mu/YOLOv8-TensorRT/blob/main/models/common.py#L27
+- https://github.com/triple-mu/YOLOv8-TensorRT/blob/main/docs/Pose.md
+- https://github.com/mimiliaogo/holohub/blob/a59e41657288604d9c0c6179e8b65cf31c6b85f3/applications/yolo_model_deployment/CMakeLists.txt
+- https://stephencowchau.medium.com/stitching-non-max-suppression-nms-to-yolov8n-on-exported-onnx-model-1c625021b22
