@@ -58,6 +58,30 @@ outputs = [httpclient.InferRequestedOutput("output")]
 response = client.infer("yolo", inputs=inputs, outputs=outputs)
 result = response.as_numpy("output")
 print(result.shape)
+
+# infer with versioned model
+response = client.infer("yolo", model_version="2", inputs=inputs, outputs=outputs)
+```
+
+## Run example with Triton client
+```bash
+wsl
+source .venv/bin/activate
+
+# Face detection
+## test face detection with dummy input
+python3 triton/test_face.py
+## test face detection with real input
+python3 triton/detect_face.py
+
+# Traffic detection
+## test traffic detection with dummy input
+python3 triton/test_traffic.py
+## test traffic detection with real input
+python3 triton/detect_traffic.py
+
+# Clear output annotations
+rm  images/*_annotated.jpg
 ```
 
 ## References

@@ -16,8 +16,8 @@
   - [x] send metadata to Kafka (include image path)
 - [x] handle multi camera inputs
 - [x] config from key value file
-- [] improve save image frame using nvds object encoder
 - [] support triton inference server
+- [] improve save image frame using nvds object encoder
 - pipeline elements configuration
 - pipepline monitoring and metrics
 - check region of interest (ROI) for face detection

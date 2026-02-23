@@ -11,3 +11,11 @@ outputs = [httpclient.InferRequestedOutput("output")]
 response = client.infer("yoloface", inputs=inputs, outputs=outputs)
 result = response.as_numpy("output")
 print(result.shape)
+
+# infer with versioned model 
+print("infer with versioned model")
+response = client.infer("yoloface", 
+                        model_version="1",
+                        inputs=inputs, outputs=outputs)
+result = response.as_numpy("output")
+print(result.shape)
