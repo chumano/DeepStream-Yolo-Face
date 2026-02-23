@@ -15,6 +15,7 @@ NVIDIA DeepStream SDK 8.0 / 7.1 / 7.0 / 6.4 / 6.3 / 6.2 / 6.1.1 / 6.1 / 6.0.1 / 
 * [YOLOv5-Face usage](docs/YOLOv5_Face.md)
 * [YOLOv7-Face usage](docs/YOLOv7_Face.md)
 * [YOLOv8-Face usage](docs/YOLOv8_Face.md)
+* [Triton Inference Server integration](docs/DEEPSTREAM-TRITON.md)
 * [NMS configuration](#nms-configuration)
 * [Detection threshold configuration](#detection-threshold-configuration)
 

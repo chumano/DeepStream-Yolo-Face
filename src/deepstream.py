@@ -484,6 +484,7 @@ MAX_ELEMENTS_IN_DISPLAY_META = 16
 
 SOURCE = ""
 INFER_CONFIG = ""
+USE_TRITON = False
 STREAMMUX_BATCH_SIZE = 1
 STREAMMUX_WIDTH = 1920
 STREAMMUX_HEIGHT = 1080
@@ -1109,10 +1110,17 @@ def main():
         sys.stderr.write("ERROR - Failed to create uridecodebin\n")
         return -1
 
-    nvinfer = Gst.ElementFactory.make("nvinfer", "nvinfer")
-    if not nvinfer or pipeline.add(nvinfer):
-        sys.stderr.write("ERROR - Failed to create nvinfer\n")
-        return -1
+    # Create inference element based on backend type
+    if USE_TRITON:
+        nvinfer = Gst.ElementFactory.make("nvinferserver", "nvinferserver")
+        if not nvinfer or pipeline.add(nvinfer):
+            sys.stderr.write("ERROR - Failed to create nvinferserver\n")
+            return -1
+    else:
+        nvinfer = Gst.ElementFactory.make("nvinfer", "nvinfer")
+        if not nvinfer or pipeline.add(nvinfer):
+            sys.stderr.write("ERROR - Failed to create nvinfer\n")
+            return -1
 
     nvtracker = Gst.ElementFactory.make("nvtracker", "nvtracker")
     if not nvtracker or pipeline.add(nvtracker):
@@ -1149,6 +1157,7 @@ def main():
     sys.stdout.write("\n")
     sys.stdout.write(f"SOURCE: {SOURCE}\n")
     sys.stdout.write(f"INFER_CONFIG: {INFER_CONFIG}\n")
+    sys.stdout.write(f"USE_TRITON: {'TRUE' if USE_TRITON else 'FALSE'}\n")
     sys.stdout.write(f"STREAMMUX_BATCH_SIZE: {STREAMMUX_BATCH_SIZE}\n")
     sys.stdout.write(f"STREAMMUX_WIDTH: {STREAMMUX_WIDTH}\n")
     sys.stdout.write(f"STREAMMUX_HEIGHT: {STREAMMUX_HEIGHT}\n")
@@ -1198,7 +1207,9 @@ def main():
     if not JETSON:
         nvstreammux.set_property("nvbuf-memory-type", 1)
         nvstreammux.set_property("gpu_id", GPU_ID)
-        nvinfer.set_property("gpu_id", GPU_ID)
+        # nvinferserver doesn't have gpu_id property (uses config file instead)
+        if not USE_TRITON:
+            nvinfer.set_property("gpu_id", GPU_ID)
         nvvidconv.set_property("nvbuf-memory-type", 1)
         nvvidconv.set_property("gpu_id", GPU_ID)
         nvosd.set_property("gpu_id", GPU_ID)
@@ -1246,12 +1257,13 @@ def main():
 
 
 def parse_args():
-    global SOURCE, INFER_CONFIG, STREAMMUX_BATCH_SIZE, STREAMMUX_WIDTH, STREAMMUX_HEIGHT, GPU_ID, JETSON
+    global SOURCE, INFER_CONFIG, USE_TRITON, STREAMMUX_BATCH_SIZE, STREAMMUX_WIDTH, STREAMMUX_HEIGHT, GPU_ID, JETSON
     global KAFKA_BROKER, KAFKA_TOPIC, KAFKA_ENABLED, KAFKA_SEND_DELAY_SEC, KAFKA_QUALITY_IMPROVEMENT_THRESHOLD
 
     parser = argparse.ArgumentParser(description="DeepStream")
     parser.add_argument("-s", "--source", required=True, help="Source stream/file")
     parser.add_argument("-c", "--infer-config", required=True, help="Config infer file")
+    parser.add_argument("--use-triton", action="store_true", help="Use Triton Inference Server (nvinferserver) instead of nvinfer")
     parser.add_argument("-b", "--streammux-batch-size", type=int, default=1, help="Streammux batch-size (default 1)")
     parser.add_argument("-w", "--streammux-width", type=int, default=1920, help="Streammux width (default 1920)")
     parser.add_argument("-e", "--streammux-height", type=int, default=1080, help="Streammux height (default 1080)")
@@ -1272,6 +1284,7 @@ def parse_args():
 
     SOURCE = args.source
     INFER_CONFIG = args.infer_config
+    USE_TRITON = args.use_triton
     STREAMMUX_BATCH_SIZE = args.streammux_batch_size
     STREAMMUX_WIDTH = args.streammux_width
     STREAMMUX_HEIGHT = args.streammux_height
