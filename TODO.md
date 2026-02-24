@@ -2,12 +2,11 @@
 
 ## deepstream
 ### Python
-- get timestamp from frame metadata
-- save frame images with bounding boxes
-  - save image to file
-  - send metadata to Kafka (include image path)
-- improve face assessment (blur, small faces, wear mask, ...)
-- handle multi camera inputs
+- [x] get timestamp from frame metadata
+- [x] save frame images with bounding boxes
+  - [x] save image to file
+  - [x] send metadata to Kafka (include image path)
+- [x] support triton inference server
 
 ### C
 - [x] get timestamp from frame metadata
@@ -16,13 +15,17 @@
   - [x] send metadata to Kafka (include image path)
 - [x] handle multi camera inputs
 - [x] config from key value file
-- [] support triton inference server
-- [] improve save image frame using nvds object encoder
-- pipeline elements configuration
-- pipepline monitoring and metrics
-- check region of interest (ROI) for face detection
-- handle dynamic input sources (add/remove camera at runtime)
-- improve face assessment (blur, small faces, wear mask, ...)
+- [x] support triton inference server
+- [] improve save image frame using nvds object encoder - nvds_obj_enc_process
+
+### C++
+- [ ] refactor deepstream.c to deepstream.cpp
+- [ ] add C++ wrapper for deepstream pipeline
+- [ ] handle dynamic input sources (add/remove camera at runtime)
+- [ ] pipeline elements configuration
+- [ ] pipepline monitoring and metrics
+- [ ] check region of interest (ROI) for face detection
+- [ ] improve face assessment (blur, small faces, wear mask, ...)
 
 ## Consumer applications
 - [x] crop face images from frames if face_image not provided by deepstream

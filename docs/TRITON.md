@@ -498,6 +498,7 @@ DEPRECATED:
 
 ## References
 - [Release Notes for Triton Inference Server](https://docs.nvidia.com/deeplearning/triton-inference-server/release-notes/rel-25-05.html)
+- [Triton Inference Server Old version](https://docs.nvidia.com/deeplearning/triton-inference-server/archives/triton-inference-server-2500/user-guide/docs/user_guide/performance_tuning.html)
 - [Triton Server Container](https://catalog.ngc.nvidia.com/orgs/nvidia/containers/tritonserver/tags?version=25.12-py3)
 - [Triton Inference Server Documentation](https://github.com/triton-inference-server/server)
 - [Triton Inference Server Model Management](https://github.com/triton-inference-server/server/blob/main/docs/user_guide/model_management.md)
