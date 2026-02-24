@@ -721,11 +721,11 @@ main(gint argc, char *argv[])
     return -1;
   }
 
-  GstElement *capsfilter = gst_element_factory_make("capsfilter", "capsfilter");
-  if (!capsfilter || !gst_bin_add(GST_BIN(pipeline), capsfilter)) {
-    g_printerr("ERROR - Failed to create capsfilter\n");
-    return -1;
-  }
+  // GstElement *capsfilter = gst_element_factory_make("capsfilter", "capsfilter");
+  // if (!capsfilter || !gst_bin_add(GST_BIN(pipeline), capsfilter)) {
+  //   g_printerr("ERROR - Failed to create capsfilter\n");
+  //   return -1;
+  // }
 
 
   //================================================
@@ -819,9 +819,9 @@ main(gint argc, char *argv[])
   g_signal_connect(appsink, "new-sample", G_CALLBACK(appsink_new_sample_callback), NULL);
 
   
-  GstCaps *caps = gst_caps_from_string("video/x-raw(memory:NVMM), format=RGBA");
-  g_object_set(G_OBJECT(capsfilter), "caps", caps, NULL);
-  gst_caps_unref(caps);
+  // GstCaps *caps = gst_caps_from_string("video/x-raw(memory:NVMM), format=RGBA");
+  // g_object_set(G_OBJECT(capsfilter), "caps", caps, NULL);
+  // gst_caps_unref(caps);
 
   g_object_set(G_OBJECT(nvstreammux),
      "batch-size", STREAMMUX_BATCH_SIZE,
@@ -859,8 +859,10 @@ main(gint argc, char *argv[])
 
   //==============================================
   // Link the elements together
-  if (!gst_element_link_many(nvstreammux, nvinfer, nvtracker, nvvidconv, 
-                           capsfilter, tee, NULL)) {
+  if (!gst_element_link_many(nvstreammux, nvinfer, nvtracker, 
+                            //nvvidconv, 
+                            //capsfilter,
+                            tee, NULL)) {
     g_printerr("ERROR - Failed to link pipeline elements to tee\n");
     return -1;
   }
