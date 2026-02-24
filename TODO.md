@@ -17,6 +17,8 @@
 - [x] config from key value file
 - [x] support triton inference server
 - [] improve save image frame using nvds object encoder - nvds_obj_enc_process. NOT WORKING ON WSL
+  - https://forums.developer.nvidia.com/t/deepstream-8-0-docker-on-wsl2-nvds-obj-enc-process-returns-error-code-1-when-saving-images-segmentation-fault/346751/4
+  - https://docs.nvidia.com/metropolis/deepstream/dev-guide/text/DS_Release_notes.html#limitations
 
 ### C++
 - [x] refactor deepstream.c to deepstream.cpp
