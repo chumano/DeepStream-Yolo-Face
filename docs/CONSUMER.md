@@ -13,7 +13,7 @@ wsl
 # activate virtual environment
 source .venv/bin/activate
 # run consumer
-cd ./consumers
+cd ./consumer
 python3 kafka_consumer.py
 ```
 

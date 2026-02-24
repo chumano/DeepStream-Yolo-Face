@@ -1,0 +1,6 @@
+libjpeg-turbo/
+final_libs/
+*.jpg
+*.jpeg
+main
+test
