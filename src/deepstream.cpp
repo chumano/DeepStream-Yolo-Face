@@ -214,7 +214,7 @@ nvosd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_da
       txt_params->x_offset = NTP_TEXT_X_OFFSET;
       txt_params->y_offset = NTP_TEXT_Y_OFFSET;
       
-      txt_params->font_params.font_name = "Ubuntu";
+      txt_params->font_params.font_name = (gchar*)"Ubuntu";
       txt_params->font_params.font_size = NTP_TEXT_FONT_SIZE;
       txt_params->font_params.font_color.red = 1.0;
       txt_params->font_params.font_color.green = 1.0;

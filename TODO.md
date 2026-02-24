@@ -16,11 +16,10 @@
 - [x] handle multi camera inputs
 - [x] config from key value file
 - [x] support triton inference server
-- [] improve save image frame using nvds object encoder - nvds_obj_enc_process
+- [] improve save image frame using nvds object encoder - nvds_obj_enc_process. NOT WORKING ON WSL
 
 ### C++
-- [ ] refactor deepstream.c to deepstream.cpp
-- [ ] add C++ wrapper for deepstream pipeline
+- [x] refactor deepstream.c to deepstream.cpp
 - [ ] handle dynamic input sources (add/remove camera at runtime)
 - [ ] pipeline elements configuration
 - [ ] pipepline monitoring and metrics
@@ -30,7 +29,7 @@
 ## Consumer applications
 - [x] crop face images from frames if face_image not provided by deepstream
 - [x] storage face images to disk
-- [ ] storage face embeddings to Qdrant
+- [x] storage face embeddings to Qdrant
 - [ ] streaming with mjpeg 
 - [ ] consumer with rule engine
 

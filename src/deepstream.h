@@ -1,6 +1,10 @@
 #ifndef __DEEPSTREAM_H__
 #define __DEEPSTREAM_H__
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <nvdsgstutils.h>
 #include <cuda_runtime_api.h>
 #include <math.h>
@@ -20,5 +24,9 @@
 
 // Global detection manager instance
 static DetectionManager *detection_manager = NULL;
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

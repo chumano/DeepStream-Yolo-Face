@@ -25,8 +25,9 @@ else
 	KAFKA_LIBS:=
 endif
 
-SRCS:= $(wildcard *.c)
-SRCS+= $(wildcard modules/*.c)
+SRCS_C:= detection_manager.c $(wildcard modules/*.c)
+SRCS_CPP:= $(wildcard *.cpp)
+SRCS:= $(SRCS_C) $(SRCS_CPP)
 
 INCS:= $(wildcard *.h)
 INCS+= $(wildcard modules/*.h)
@@ -58,8 +59,11 @@ all: $(APP)
 %.o: %.c $(INCS) Makefile
 	$(CC) -c -o $@ $(CFLAGS) $<
 
+%.o: %.cpp $(INCS) Makefile
+	$(CXX) -c -o $@ $(CFLAGS) $<
+
 $(APP): $(OBJS) Makefile
-	$(CC) -o $(APP) $(OBJS) $(LIBS)
+	$(CXX) -o $(APP) $(OBJS) $(LIBS)
 
 clean: clean_images
 	rm -rf $(OBJS) $(APP)
