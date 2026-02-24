@@ -61,6 +61,9 @@ rm outputs/frames/*
     --kafka-broker kafka:29092 \
     --kafka-topic face-detections --disable-display --disable-crop-image
 
+# triton
+./deepstream -f configs/app_triton.ini --disable-display
+
 GST LOG LEVEL
 https://gstreamer.freedesktop.org/documentation/tutorials/basic/debugging-tools.html?gi-language=c
 

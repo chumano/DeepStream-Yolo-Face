@@ -42,17 +42,17 @@ def yolov8_face_export(weights, device, fuse=True):
     model = deepcopy(model.model).to(device)
     for p in model.parameters():
         p.requires_grad = False
-    model.eval()
-    model.float()
+    model.eval() # set to eval mode to disable training-specific layers
+    model.float() # ensure model is in float32 for ONNX export
     if fuse:
-        model = model.fuse()
+        model = model.fuse() # fuse Conv+BN+Act layers for better performance
     for k, m in model.named_modules():
         if isinstance(m, (Detect, RTDETRDecoder)):
             m.dynamic = False
             m.export = False
             m.format = "onnx"
         elif isinstance(m, C2f):
-            m.forward = m.forward_split
+            m.forward = m.forward_split # use forward_split for better ONNX export compatibility
     return model
 
 

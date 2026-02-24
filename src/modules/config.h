@@ -53,6 +53,9 @@ extern int NTP_TEXT_FONT_SIZE;
 
 extern gboolean WAIT_FOR_USER_INPUT;
 
+// Triton / nvinferserver
+extern gboolean USE_TRITON;
+
 
 gboolean
 parse_config_file(const gchar *config_file, GError **error);

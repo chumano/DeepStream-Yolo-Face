@@ -611,6 +611,7 @@ main(gint argc, char *argv[])
   GST_INFO("GPU_ID: %d", GPU_ID);
   GST_INFO("PERF_MEASUREMENT_INTERVAL_SEC: %d", PERF_MEASUREMENT_INTERVAL_SEC);
   GST_INFO("JETSON: %s", JETSON ? "TRUE" : "FALSE");
+  GST_INFO("USE_TRITON: %s", USE_TRITON ? "TRUE" : "FALSE");
   if (KAFKA_ENABLED) {
     GST_INFO("KAFKA_BROKER: %s", KAFKA_BROKER);
     GST_INFO("KAFKA_TOPIC: %s", KAFKA_TOPIC);
@@ -700,9 +701,11 @@ main(gint argc, char *argv[])
     }
   }
 
-  GstElement *nvinfer = gst_element_factory_make("nvinfer", "nvinfer");
+  GstElement *nvinfer = gst_element_factory_make(
+      USE_TRITON ? "nvinferserver" : "nvinfer",
+      USE_TRITON ? "nvinferserver" : "nvinfer");
   if (!nvinfer || !gst_bin_add(GST_BIN(pipeline), nvinfer)) {
-    g_printerr("ERROR - Failed to create nvinfer\n");
+    g_printerr("ERROR - Failed to create %s\n", USE_TRITON ? "nvinferserver" : "nvinfer");
     return -1;
   }
 
@@ -848,7 +851,9 @@ main(gint argc, char *argv[])
 
   if (!JETSON) {
     g_object_set(G_OBJECT(nvstreammux), "nvbuf-memory-type", NVBUF_MEM_CUDA_DEVICE, "gpu_id", GPU_ID, NULL);
-    g_object_set(G_OBJECT(nvinfer), "gpu_id", GPU_ID, NULL);
+    if (!USE_TRITON) {
+      g_object_set(G_OBJECT(nvinfer), "gpu_id", GPU_ID, NULL);
+    }
     g_object_set(G_OBJECT(nvvidconv), "nvbuf-memory-type", NVBUF_MEM_CUDA_DEVICE, "gpu_id", GPU_ID, NULL);
   }
 

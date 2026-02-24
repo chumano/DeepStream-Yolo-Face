@@ -50,6 +50,9 @@ int NTP_TEXT_FONT_SIZE = 20;
 
 gboolean WAIT_FOR_USER_INPUT = TRUE;
 
+// Triton / nvinferserver
+gboolean USE_TRITON = FALSE;
+
 gboolean
 parse_config_file(const gchar *config_file, GError **error)
 {
@@ -156,6 +159,7 @@ parse_config_file(const gchar *config_file, GError **error)
   
   // Load misc settings
   GET_BOOLEAN("wait-for-user-input", WAIT_FOR_USER_INPUT);
+  GET_BOOLEAN("use-triton", USE_TRITON);
   
   #undef GET_STRING
   #undef GET_STRING_ARRAY
@@ -181,6 +185,7 @@ GOptionEntry entries[] = {
   {"kafka-quality-threshold", 'q', 0, G_OPTION_ARG_DOUBLE, &KAFKA_QUALITY_IMPROVEMENT_THRESHOLD, "Minimum quality improvement to resend (default: 0.005)", NULL},
   {"disable-crop-image", 0, G_OPTION_FLAG_REVERSE, G_OPTION_ARG_NONE, &ENABLE_CROP_IMAGE, "Disable crop image in Kafka JSON", NULL},
   {"disable-display", 0, 0, G_OPTION_ARG_NONE, &DISABLE_DISPLAY, "Disable video display output", NULL},
+  {"use-triton", 0, 0, G_OPTION_ARG_NONE, &USE_TRITON, "Use nvinferserver (Triton) instead of nvinfer", NULL},
   {"enable-frame-save", 0, 0, G_OPTION_ARG_NONE, &ENABLE_FRAME_SAVE, "Enable saving frames to disk", NULL},
   {"frame-save-dir", 0, 0, G_OPTION_ARG_STRING, &FRAME_SAVE_DIR, "Directory to save frames (default: ./outputs/frames)", NULL},
   {"frame-save-quality", 0, 0, G_OPTION_ARG_INT, &FRAME_SAVE_QUALITY, "JPEG quality 0-100 (default: 85)", NULL},

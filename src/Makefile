@@ -68,6 +68,9 @@ run: clean_images $(APP)
 	GST_DEBUG=deepstream:$(LOG) ./$(APP) --config /app/configs/app.ini \
 	-s file:///app/videos/faces_tracking.mp4
 
+run_triton: clean_images $(APP)
+	GST_DEBUG=deepstream:$(LOG) ./$(APP) --config /app/configs/app_triton.ini
+
 run2: clean_images $(APP)
 	GST_DEBUG=deepstream:$(LOG) ./$(APP) --config /app/configs/app_multi.ini
 
