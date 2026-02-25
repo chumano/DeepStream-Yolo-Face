@@ -3,6 +3,10 @@
 
 #include "gstnvdsmeta.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define MAX_SOURCE_BINS 1024
 
 typedef struct
@@ -43,5 +47,9 @@ void perf_cb(gpointer context, NvDsAppPerfStruct *str);
 
 gboolean enable_perf_measurement(NvDsAppPerfStructInt *str, GstPad *sink_bin_pad, guint num_sources, gulong interval_sec,
     guint num_surfaces_per_frame, perf_callback callback);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

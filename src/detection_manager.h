@@ -8,6 +8,10 @@
 #include <librdkafka/rdkafka.h>
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // =============================================================================
 // Type Definitions
 // =============================================================================
@@ -91,5 +95,9 @@ void detection_manager_cleanup_kafka(DetectionManager *manager);
  * @return TRUE if enabled, FALSE otherwise
  */
 gboolean detection_manager_is_enabled(DetectionManager *manager);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // __DETECTION_MANAGER_H__

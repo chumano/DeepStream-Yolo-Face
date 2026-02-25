@@ -3,6 +3,10 @@
 
 #include <glib.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct _Landmark {
   gdouble x;
   gdouble y;
@@ -44,4 +48,9 @@ typedef struct _FaceContext {
   const FaceQualityMetrics *metrics;
   const gchar *face_image_base64;
 } FaceContext;
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif

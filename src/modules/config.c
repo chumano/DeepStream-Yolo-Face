@@ -207,7 +207,7 @@ gint parse_command_line(gint argc, char *argv[])
   
   // ========== Load config file if specified ==========
   if (CONFIG_FILE) {
-    g_printf("Loading configuration from file...\n");
+    g_print("Loading configuration from file...\n");
     GError *config_error = NULL;
     if (!parse_config_file(CONFIG_FILE, &config_error)) {
       g_printerr("ERROR - Failed to load config file: %s\n", 
@@ -263,7 +263,7 @@ gint parse_command_line(gint argc, char *argv[])
     }
   }
 
-  g_printf("Command line options parsed successfully\n");
+  g_print("Command line options parsed successfully\n");
   return 1;
 }
 

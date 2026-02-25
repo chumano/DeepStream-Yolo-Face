@@ -1,7 +1,5 @@
 #include "deepstream.h"
 #include <jpeglib.h>
-#include <setjmp.h>
-#include "nvbufsurftransform.h"
 
 //  modules
 #include "modules/config.h"
@@ -83,6 +81,14 @@ process_object(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta, NvBufSurface
 
   // Create face context
   FaceContext ctx = {
+    .source_id = frame_meta->source_id,
+    .frame_timestamp = frame_timestamp,
+    .frame_num = (guint) frame_meta->frame_num,
+    .object_id = obj_meta->object_id,
+    .class_id = obj_meta->class_id,
+    .confidence = obj_meta->confidence,
+
+    //
     .landmarks = landmarks,
     .num_landmarks = num_landmarks,
     .frame_image_path = frame_image_path,
@@ -93,13 +99,6 @@ process_object(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta, NvBufSurface
     .quality_score = quality_score,
     .metrics = &metrics,
     .face_image_base64 = face_image_base64,
-    //
-    .frame_timestamp = frame_timestamp,
-    .frame_num = frame_meta->frame_num,
-    .source_id = frame_meta->source_id,
-    .object_id = obj_meta->object_id,
-    .class_id = obj_meta->class_id,
-    .confidence = obj_meta->confidence,
   };
 
   // Process face detection and send to Kafka

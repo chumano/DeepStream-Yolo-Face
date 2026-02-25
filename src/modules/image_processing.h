@@ -6,6 +6,10 @@
 #include "gstnvdsmeta.h"
 #include "face.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 
 /**
  * Calculate crop box with padding around bounding box
@@ -29,5 +33,9 @@ gboolean ensure_frame_save_directory(const gchar *dir_path);
  */
 gchar *save_frame_to_jpeg(NvBufSurface *surface, NvDsFrameMeta *frame_meta,
                           const gchar *base_output_dir, gint quality);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

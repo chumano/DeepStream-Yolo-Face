@@ -2,6 +2,10 @@
 #define __CONFIG_H__
 #include <nvdsgstutils.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 extern gchar *CONFIG_FILE;
 
 // Basic settings
@@ -63,4 +67,9 @@ parse_config_file(const gchar *config_file, GError **error);
 gint parse_command_line(gint argc, char *argv[]);
 
 void config_free();
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif // __CONFIG_H__
