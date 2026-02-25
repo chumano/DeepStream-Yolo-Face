@@ -2,6 +2,9 @@
 
 NVIDIA DeepStream SDK 8.0 / 7.1 / 7.0 / 6.4 / 6.3 / 6.2 / 6.1.1 / 6.1 / 6.0.1 / 6.0 application for YOLO-Face models
 
+Program run in docker container :  `docker exec -it deepstream-yolo-face-dev /bin/bash`
+at path `/app/DeepStream-Yolo-Face/`
+
 --------------------------------------------------------------------------------------------------
 ### YOLO object detection models and other infos: https://github.com/marcoslucianops/DeepStream-Yolo
 --------------------------------------------------------------------------------------------------

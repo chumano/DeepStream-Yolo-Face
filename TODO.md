@@ -22,9 +22,9 @@
 
 ### C++
 - [x] refactor deepstream.c to deepstream.cpp
+- [ ] pipepline monitoring and metrics
 - [ ] handle dynamic input sources (add/remove camera at runtime)
 - [ ] pipeline elements configuration
-- [ ] pipepline monitoring and metrics
 - [ ] check region of interest (ROI) for face detection
 - [ ] improve face assessment (blur, small faces, wear mask, ...)
 

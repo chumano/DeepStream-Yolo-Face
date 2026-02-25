@@ -504,4 +504,5 @@ DEPRECATED:
 - [Triton Inference Server Model Management](https://github.com/triton-inference-server/server/blob/main/docs/user_guide/model_management.md)
 - [Triton Inference Server Model Configuration](https://github.com/triton-inference-server/server/blob/main/docs/user_guide/model_configuration.md)
 - [Triton Inference Server Tutorials](https://github.com/triton-inference-server/tutorials)
+- [Triton Inference Server Python Backend](https://github.com/triton-inference-server/python_backend)
 - [Triton Python Client](https://github.com/triton-inference-server/client)
