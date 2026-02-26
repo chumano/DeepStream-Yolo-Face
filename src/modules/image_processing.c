@@ -116,7 +116,7 @@ encode_crop_to_base64_jpeg(NvBufSurface *surface, CropBox *crop_box, gint qualit
 #ifdef __aarch64__
   create_params.memType = NVBUF_MEM_DEFAULT;
 #else
-  create_params.memType = NVBUF_MEM_CUDA_UNIFIED;
+  create_params.memType = NVBUF_MEM_CUDA_DEVICE;
 #endif
   
   if (NvBufSurfaceCreate(&dst_surface, 1, &create_params) != 0) {
@@ -197,36 +197,36 @@ encode_crop_to_base64_jpeg(NvBufSurface *surface, CropBox *crop_box, gint qualit
   
   gboolean data_copied = FALSE;
   
-  if (dst_surface->memType == NVBUF_MEM_CUDA_UNIFIED && dst_params->dataPtr) {
-    cudaError_t cuda_err = cudaMemcpy(cpu_buffer, dst_params->dataPtr, buffer_size, cudaMemcpyDeviceToHost);
-    if (cuda_err == cudaSuccess) {
-      data_copied = TRUE;
-    } else {
-      cudaDeviceSynchronize();
-      memcpy(cpu_buffer, dst_params->dataPtr, buffer_size);
-      data_copied = TRUE;
-    }
-  }
+  // if (dst_surface->memType == NVBUF_MEM_CUDA_UNIFIED && dst_params->dataPtr) {
+  //   cudaError_t cuda_err = cudaMemcpy(cpu_buffer, dst_params->dataPtr, buffer_size, cudaMemcpyDeviceToHost);
+  //   if (cuda_err == cudaSuccess) {
+  //     data_copied = TRUE;
+  //   } else {
+  //     cudaDeviceSynchronize();
+  //     memcpy(cpu_buffer, dst_params->dataPtr, buffer_size);
+  //     data_copied = TRUE;
+  //   }
+  // }
   
-  if (!data_copied) {
-    if (NvBufSurfaceMap(dst_surface, 0, 0, NVBUF_MAP_READ) == 0) {
-      NvBufSurfaceSyncForCpu(dst_surface, 0, 0);
+  // if (!data_copied && dst_surface->memType == NVBUF_MEM_CUDA_UNIFIED) {
+  //   if (NvBufSurfaceMap(dst_surface, 0, 0, NVBUF_MAP_READ) == 0) {
+  //     NvBufSurfaceSyncForCpu(dst_surface, 0, 0);
       
-      guchar *mapped_data = NULL;
-      if (dst_params->mappedAddr.addr[0]) {
-        mapped_data = (guchar *)dst_params->mappedAddr.addr[0];
-      } else if (dst_params->dataPtr) {
-        mapped_data = (guchar *)dst_params->dataPtr;
-      }
+  //     guchar *mapped_data = NULL;
+  //     if (dst_params->mappedAddr.addr[0]) {
+  //       mapped_data = (guchar *)dst_params->mappedAddr.addr[0];
+  //     } else if (dst_params->dataPtr) {
+  //       mapped_data = (guchar *)dst_params->dataPtr;
+  //     }
       
-      if (mapped_data) {
-        memcpy(cpu_buffer, mapped_data, buffer_size);
-        data_copied = TRUE;
-      }
+  //     if (mapped_data) {
+  //       memcpy(cpu_buffer, mapped_data, buffer_size);
+  //       data_copied = TRUE;
+  //     }
       
-      NvBufSurfaceUnMap(dst_surface, 0, 0);
-    }
-  }
+  //     NvBufSurfaceUnMap(dst_surface, 0, 0);
+  //   }
+  // }
   
   if (!data_copied && dst_params->dataPtr) {
     cudaError_t cuda_err = cudaMemcpy(cpu_buffer, dst_params->dataPtr, buffer_size, cudaMemcpyDeviceToHost);
@@ -371,7 +371,7 @@ save_frame_to_jpeg(NvBufSurface *surface, NvDsFrameMeta *frame_meta,
 #ifdef __aarch64__
   create_params.memType = NVBUF_MEM_DEFAULT;
 #else
-  create_params.memType = NVBUF_MEM_CUDA_UNIFIED;
+  create_params.memType = NVBUF_MEM_CUDA_DEVICE;
 #endif
 
   if (NvBufSurfaceCreate(&dst_surface, 1, &create_params) != 0) {
@@ -388,7 +388,7 @@ save_frame_to_jpeg(NvBufSurface *surface, NvDsFrameMeta *frame_meta,
   NvBufSurfTransformConfigParams config_params = {0};
   config_params.compute_mode = NvBufSurfTransformCompute_Default;
   config_params.gpu_id = surface->gpuId;
-  config_params.cuda_stream = NULL;
+  config_params.cuda_stream = NULL; // Use default stream for simplicity, but consider using a dedicated stream for better performance in a real application
 
   NvBufSurfaceParams orig_first = surface->surfaceList[0];
   guint orig_numFilled = surface->numFilled;
@@ -422,7 +422,7 @@ save_frame_to_jpeg(NvBufSurface *surface, NvDsFrameMeta *frame_meta,
     return NULL;
   }
 
-  cudaStreamSynchronize(0);
+  cudaStreamSynchronize(0); // Ensure transform is complete before accessing data
 
   // ...existing CPU copy and JPEG encoding code...
   NvBufSurfaceParams *dst_params = &dst_surface->surfaceList[0];
