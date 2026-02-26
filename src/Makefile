@@ -51,7 +51,7 @@ ifeq ($(LOG_APP),)
 endif
 LOG?=
 ifeq ($(LOG),)
-	LOG=3
+	LOG=4
 endif
 
 all: $(APP)

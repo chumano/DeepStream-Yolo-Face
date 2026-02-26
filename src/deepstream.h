@@ -13,10 +13,14 @@
 
 #include "modules/interrupt.h"
 #include "modules/perf.h"
+#include "modules/pipeline_monitor.h"
 #include "detection_manager.h"
 
 
 // Global detection manager instance
 static DetectionManager *detection_manager = NULL;
+
+// Global pipeline monitor instance
+static PipelineMonitor *pipeline_monitor = NULL;
 
 #endif

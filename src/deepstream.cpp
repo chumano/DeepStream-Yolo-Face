@@ -64,7 +64,7 @@ process_object(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta, NvBufSurface
 
   if (!assess_face_quality(landmarks, num_landmarks, 
                            &is_good_face, &quality_score, &metrics)) {
-    GST_WARNING("Failed to assess face quality for object_id=%lu", obj_meta->object_id);
+    GST_DEBUG("Failed to assess face quality for object_id=%lu", obj_meta->object_id);
     return;
   }
 
@@ -100,6 +100,12 @@ process_object(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta, NvBufSurface
     .metrics = &metrics,
     .face_image_base64 = face_image_base64,
   };
+
+  // Record detection metrics
+  if (pipeline_monitor) {
+    pipeline_monitor_record_detection(pipeline_monitor, ctx.source_id,
+                                      ctx.is_good_face, ctx.quality_score);
+  }
 
   // Process face detection and send to Kafka
   if (KAFKA_ENABLED && detection_manager && detection_manager_is_enabled(detection_manager)) {
@@ -383,6 +389,30 @@ appsink_new_sample_callback(GstElement *appsink, gpointer user_data)
   for (l_frame = batch_meta->frame_meta_list; l_frame != NULL; l_frame = l_frame->next) {
     NvDsFrameMeta *frame_meta = (NvDsFrameMeta *)(l_frame->data);
 
+    // === Record pipeline metrics (detection count, latency) ===
+    // Record frame-level metrics and latency
+    gboolean has_objects = (frame_meta->obj_meta_list != NULL);
+    if (pipeline_monitor) {
+      pipeline_monitor_record_frame(pipeline_monitor,
+                                    frame_meta->source_id,
+                                    (gboolean)frame_meta->bInferDone,
+                                    has_objects);
+
+      // Compute end-to-end latency: buffer PTS (ns) vs. wall clock
+      if (frame_meta->ntp_timestamp > 0) {
+        gdouble buf_time_sec  = (gdouble)frame_meta->ntp_timestamp / 1e9;
+        gdouble wall_time_now = (gdouble)g_get_real_time() / 1e6; /* µs -> ms already? no */
+        // g_get_real_time returns microseconds
+        wall_time_now = (gdouble)g_get_real_time() / 1e6; /* us -> ms */
+        buf_time_sec  = buf_time_sec * 1e3;               /* s -> ms */
+        gdouble latency_ms = wall_time_now - buf_time_sec;
+        if (latency_ms > 0.0 && latency_ms < 60000.0) {
+          pipeline_monitor_record_latency(pipeline_monitor, latency_ms);
+        }
+      }
+    }
+
+    // === Save frame to disk if enabled ===
     // check frame is infer done
     if (frame_meta->bInferDone == FALSE) {
       GST_TRACE("Frame %d inference not done yet", frame_meta->frame_num);
@@ -658,6 +688,14 @@ main(gint argc, char *argv[])
   }
 
   // ============================================================================
+  // Initialize pipeline monitor
+  GST_INFO("Initializing pipeline monitor...");
+  pipeline_monitor = pipeline_monitor_new(PERF_MEASUREMENT_INTERVAL_SEC, NUM_SOURCES);
+  if (!pipeline_monitor) {
+    g_printerr("WARNING - Failed to create pipeline monitor, continuing without metrics\n");
+  }
+
+  // ============================================================================
   // Initialize detection manager
   GST_INFO("Initializing detection manager...");
   init_detection_manager();
@@ -750,8 +788,12 @@ main(gint argc, char *argv[])
     
     g_object_set(G_OBJECT(queue_display),
         "max-size-buffers", 5,
-        "leaky", 2,
+        "leaky", 2, // Leaky on downstream (old buffers)
         NULL);
+
+    if (pipeline_monitor) {
+      pipeline_monitor_add_queue(pipeline_monitor, "queue_display", queue_display);
+    }
 
     // osd    
     nvosd = gst_element_factory_make("nvdsosd", "nvdsosd");
@@ -798,8 +840,13 @@ main(gint argc, char *argv[])
 
   g_object_set(G_OBJECT(queue_app),
     "max-size-buffers", 5,
-    "leaky", 2,
+    "leaky", 2, // Leaky on downstream (old buffers)
     NULL);
+
+  // Register queues with the pipeline monitor
+  if (pipeline_monitor) {
+    pipeline_monitor_add_queue(pipeline_monitor, "queue_app", queue_app);
+  }
 
   GstElement *appsink = gst_element_factory_make("appsink", "appsink");
   if (!appsink || !gst_bin_add(GST_BIN(pipeline), appsink)) {
@@ -942,6 +989,14 @@ main(gint argc, char *argv[])
   gst_element_set_state(pipeline, GST_STATE_NULL);
 
   // ===============================================
+  // Print final pipeline metrics report
+  if (pipeline_monitor) {
+    g_print("\n=== FINAL PIPELINE METRICS REPORT ===\n");
+    pipeline_monitor_print_report(pipeline_monitor);
+    pipeline_monitor_free(pipeline_monitor);
+    pipeline_monitor = NULL;
+  }
+
   // Cleanup detection manager
   cleanup_detection_manager();
 
