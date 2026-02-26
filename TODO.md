@@ -23,7 +23,7 @@
 ### C++
 - [x] refactor deepstream.c to deepstream.cpp
 - [x] pipepline monitoring and metrics
-- [ ] handle dynamic input sources (add/remove camera at runtime)
+- [ ] handle dynamic input sources (add/remove camera at runtime) through rest server
   - https://docs.nvidia.com/metropolis/deepstream/7.1/text/DS_plugin_gst-nvmultiurisrcbin.html
 - [ ] pipeline elements configuration
 - [ ] check region of interest (ROI) for face detection
@@ -33,6 +33,7 @@
 - [x] crop face images from frames if face_image not provided by deepstream
 - [x] storage face images to disk
 - [x] storage face embeddings to Qdrant
+- [x] add annotation box to frame images and save to disk
 - [ ] streaming with mjpeg 
 - [ ] consumer with rule engine
 

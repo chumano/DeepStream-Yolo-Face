@@ -46,6 +46,8 @@ class Config:
     kafka_topic: str = field(default_factory=lambda: os.getenv("KAFKA_TOPIC", "face-detections"))
     kafka_offset_reset: str = field(default_factory=lambda: os.getenv("KAFKA_OFFSET_RESET", "latest"))
     stats_interval: int = field(default_factory=lambda: int(os.getenv("STATS_INTERVAL", 5)))
+    save_annotated_frames: bool = field(default_factory=lambda: os.getenv("SAVE_ANNOTATED_FRAMES", "False").lower() in ("1", "true", "yes"))
+    annotated_frames_output_dir: str = field(default_factory=lambda: os.getenv("ANNOTATED_FRAMES_OUTPUT_DIR", "../outputs/annotated_frames"))
     target_face_size: Tuple[int, int] = (112, 112)
     desired_left_eye: Tuple[float, float] = (0.35, 0.35)
     landmark_labels: Dict[int, str] = field(default_factory=lambda: {
@@ -97,7 +99,51 @@ class ImageProcessor:
             )
         
         return img_with_landmarks
-    
+
+    def draw_detection_on_frame(
+        self,
+        frame: np.ndarray,
+        detection: Dict[str, Any],
+        bbox_color: Tuple[int, int, int] = (0, 255, 0),
+        landmark_color: Tuple[int, int, int] = (0, 0, 255)
+    ) -> np.ndarray:
+        """Draw bounding box, label, and landmarks on a full frame image."""
+        annotated = frame.copy()
+        bbox = detection.get('bbox', {})
+        landmarks = detection.get('landmarks', [])
+        object_id = detection.get('object_id', 0)
+        confidence = detection.get('confidence', 0)
+        quality_score = detection.get('face_quality', {}).get('quality_score', 0)
+        is_frontal = detection.get('face_quality', {}).get('is_frontal', False)
+
+        if bbox:
+            left = int(bbox['left'])
+            top = int(bbox['top'])
+            right = int(left + bbox['width'])
+            bottom = int(top + bbox['height'])
+            cv2.rectangle(annotated, (left, top), (right, bottom), bbox_color, 2)
+
+            frontal_tag = '  F' if is_frontal else ''
+            label = f"ID:{object_id}  {confidence:.2f}  Q:{quality_score:.2f}{frontal_tag}"
+            label_y = top - 8 if top > 20 else bottom + 18
+            cv2.putText(
+                annotated, label, (left, label_y),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, bbox_color, 1, cv2.LINE_AA
+            )
+
+        if landmarks:
+            for idx, lm in enumerate(landmarks):
+                x = int(lm['x'])
+                y = int(lm['y'])
+                cv2.circle(annotated, (x, y), 3, landmark_color, -1)
+                lm_label = self.config.landmark_labels.get(idx, str(idx))
+                cv2.putText(
+                    annotated, lm_label, (x + 4, y - 4),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.25, landmark_color, 1, cv2.LINE_AA
+                )
+
+        return annotated
+
     def align_face(
         self,
         image: np.ndarray,
@@ -186,6 +232,8 @@ class FaceStorage:
         """Create output directory if needed."""
         if self.config.save_images:
             os.makedirs(self.config.faces_output_dir, exist_ok=True)
+        if self.config.save_annotated_frames:
+            os.makedirs(self.config.annotated_frames_output_dir, exist_ok=True)
             
     def _get_source_dir(self, source_id: int) -> str:
         """Get or create directory for a specific source ID."""
@@ -357,6 +405,47 @@ class FaceStorage:
             return None
     
     
+    def save_annotated_frame(self, detection: Dict[str, Any]) -> Optional[str]:
+        """Load the source frame image, draw bbox + landmarks, and save to annotated frames dir."""
+        if not self.config.save_annotated_frames:
+            return None
+
+        frame_path = detection.get('frame_image_path')
+        if not frame_path:
+            return None
+
+        frame_path_abs = (
+            frame_path if os.path.isabs(frame_path)
+            else os.path.join(self.config.frames_output_dir, frame_path)
+        )
+        if not os.path.exists(frame_path_abs):
+            logger.warning(f"Frame image not found for annotation: {frame_path_abs}")
+            return None
+
+        frame_img = cv2.imread(frame_path_abs)
+        if frame_img is None:
+            logger.warning(f"Failed to read frame image: {frame_path_abs}")
+            return None
+
+        annotated = self.image_processor.draw_detection_on_frame(frame_img, detection)
+
+        source_id = detection.get('source_id', 0)
+        object_id = detection.get('object_id', 0)
+        frame_num = detection.get('frame_number', 0)
+        timestamp = detection.get('timestamp', time.time())
+        dt = datetime.fromtimestamp(timestamp)
+
+        source_dir = os.path.join(self.config.annotated_frames_output_dir, f"source_{source_id}")
+        os.makedirs(source_dir, exist_ok=True)
+
+        filename = (
+            f"frame_{frame_num:06d}_obj{object_id:03d}"
+            f"_{dt.strftime('%Y%m%d_%H%M%S')}.jpg"
+        )
+        filepath = os.path.join(source_dir, filename)
+        cv2.imwrite(filepath, annotated)
+        return filepath
+
     def _transform_landmarks(
         self,
         landmarks: List[Dict[str, float]],
@@ -622,6 +711,10 @@ class FaceDetectionConsumer:
                 logger.info(f"  - Landmarks overlay: {'enabled' if self.config.save_landmarks else 'disabled'}")
             else:
                 logger.info("Image saving disabled")
+            if self.config.save_annotated_frames:
+                logger.info(f"Saving annotated frames to: {os.path.abspath(self.config.annotated_frames_output_dir)}")
+            else:
+                logger.info("Annotated frame saving disabled")
             
             logger.info("Listening for face detection events...")
             
@@ -666,12 +759,16 @@ class FaceDetectionConsumer:
         self.printer.print_detection(detection, message.partition, message.offset)
         
         # Save raw face image
-     
         saved_path = self.storage.save_face_image(detection)
         if saved_path:
             self.images_saved += 1
             logger.info(f"\n📷 Face image saved: {saved_path}")
-            
+
+        # Save annotated frame image
+        annotated_path = self.storage.save_annotated_frame(detection)
+        if annotated_path:
+            logger.info(f"🖼️  Annotated frame saved: {annotated_path}")
+
         # Save aligned face and generate embedding
         self._process_aligned_face(detection)
     
