@@ -36,6 +36,8 @@ typedef struct _FaceContext {
   guint64 object_id;
   gint class_id;
   gdouble confidence;
+  guint frame_width;
+  guint frame_height;
 
   const Landmark *landmarks;
   guint num_landmarks;

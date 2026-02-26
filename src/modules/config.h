@@ -6,67 +6,143 @@
 extern "C" {
 #endif
 
-extern gchar *CONFIG_FILE;
+// =============================================================================
+// Configuration structs — one per pipeline / feature domain
+// =============================================================================
 
-// Basic settings
-//extern gchar *SOURCE;
-extern gchar **SOURCES;  // Array of source URIs
-extern guint NUM_SOURCES;
+/** Input source URIs */
+typedef struct {
+  gchar **uris;   /**< NULL-terminated array of URI strings */
+  guint   count;  /**< Number of active sources */
+} AppSourceConfig;
 
-extern gchar *INFER_CONFIG;
-extern guint STREAMMUX_BATCH_SIZE;
-extern guint STREAMMUX_WIDTH;
-extern guint STREAMMUX_HEIGHT;
-extern guint GPU_ID;
+/** nvstreammux element */
+typedef struct {
+  guint batch_size;             /**< default 1 */
+  guint width;                  /**< default 1920 */
+  guint height;                 /**< default 1080 */
+  guint batched_push_timeout;   /**< microseconds, default 25000 */
+} AppStreamMuxConfig;
 
-extern guint PERF_MEASUREMENT_INTERVAL_SEC;
-extern gboolean JETSON;
+/** nvinfer / nvinferserver element */
+typedef struct {
+  gchar    *config_file;  /**< path to nvinfer config txt */
+  gboolean  use_triton;   /**< TRUE → nvinferserver, FALSE → nvinfer */
+  gboolean  qos;          /**< default FALSE */
+} AppInferConfig;
 
-// Kafka settings
-extern gchar *KAFKA_BROKER;
-extern gchar *KAFKA_TOPIC;
-extern gboolean KAFKA_ENABLED;
-extern gdouble KAFKA_SEND_DELAY_SEC;
-extern gdouble KAFKA_QUALITY_IMPROVEMENT_THRESHOLD;
-extern gdouble KAFKA_SENT_RECORD_TTL_SEC;
-extern gdouble KAFKA_PENDING_TTL_SEC;
-extern gdouble KAFKA_CLEANUP_INTERVAL_SEC;
+/** nvtracker element */
+typedef struct {
+  guint     width;                 /**< default 640 */
+  guint     height;                /**< default 384 */
+  gchar    *ll_lib_file;           /**< low-level tracker .so */
+  gchar    *ll_config_file;        /**< tracker config YAML */
+  gboolean  display_tracking_id;   /**< default TRUE */
+} AppTrackerConfig;
 
-// Face quality thresholds
-extern gdouble MIN_LANDMARK_CONFIDENCE;
-extern guint MIN_VISIBLE_LANDMARKS;
-extern gdouble FACE_QUALITY_THRESHOLD;
-//extern gdouble MAX_HEAD_ROTATION_ANGLE;
-extern gdouble MIN_FRONTAL_SCORE;
+/** nvdsosd element */
+typedef struct {
+  gint     process_mode;  /**< 0=CPU, 1=GPU; default 1 (MODE_GPU) */
+  gboolean qos;           /**< default FALSE */
+} AppOsdConfig;
 
-// Crop image support
-extern gboolean ENABLE_CROP_IMAGE;
+/** Display sink (nveglglessink / nv3dsink) */
+typedef struct {
+  gboolean disabled;       /**< TRUE → use fakesink instead */
+  guint    window_width;   /**< default 400 */
+  guint    window_height;  /**< default 400 */
+  gboolean sync;           /**< default FALSE */
+  gboolean async_sink;     /**< default FALSE */
+  gboolean qos;            /**< default FALSE */
+} AppDisplayConfig;
 
-// Display settings
-extern gboolean DISABLE_DISPLAY;
+/** Shared queue element settings (queue_display and queue_app) */
+typedef struct {
+  guint max_size_buffers;  /**< default 5 */
+  gint  leaky;             /**< 0=no-leak, 1=upstream, 2=downstream; default 2 */
+} AppQueueConfig;
 
-// Frame saving settings
-extern gboolean ENABLE_FRAME_SAVE;
-extern gchar *FRAME_SAVE_DIR;
-extern guint FRAME_SAVE_QUALITY; // JPEG quality (0-100)
+/** appsink element */
+typedef struct {
+  guint    max_buffers;  /**< default 5 */
+  gboolean drop;         /**< default TRUE */
+  gboolean sync;         /**< default FALSE */
+} AppAppsinkConfig;
 
-extern int MAX_DISPLAY_LEN;
-extern int NTP_TEXT_X_OFFSET;
-extern int NTP_TEXT_Y_OFFSET;
-extern int NTP_TEXT_FONT_SIZE;
+/** Kafka / detection-manager */
+typedef struct {
+  gboolean enabled;
+  gchar   *broker;
+  gchar   *topic;
+  gdouble  send_delay_sec;
+  gdouble  quality_improvement_threshold;
+  gdouble  sent_record_ttl_sec;
+  gdouble  pending_ttl_sec;
+  gdouble  cleanup_interval_sec;
+} AppKafkaConfig;
 
-extern gboolean WAIT_FOR_USER_INPUT;
+/** Face quality assessment thresholds */
+typedef struct {
+  gdouble min_landmark_confidence;
+  guint   min_visible_landmarks;
+  gdouble face_quality_threshold;
+  gdouble min_frontal_score;
+} AppFaceQualityConfig;
 
-// Triton / nvinferserver
-extern gboolean USE_TRITON;
+/** On-screen text overlay (NTP timestamp + object ID labels) */
+typedef struct {
+  gint max_display_len;
+  gint ntp_text_x_offset;
+  gint ntp_text_y_offset;
+  gint ntp_text_font_size;
+} AppOsdTextConfig;
 
+/** JPEG frame-save */
+typedef struct {
+  gboolean enabled;
+  gchar   *dir;
+  guint    quality;  /**< JPEG quality 0–100 */
+} AppFrameSaveConfig;
 
-gboolean
-parse_config_file(const gchar *config_file, GError **error);
+// =============================================================================
+// Top-level application configuration
+// =============================================================================
 
-gint parse_command_line(gint argc, char *argv[]);
+typedef struct {
+  gchar   *config_file;  /**< path to INI config (if provided via -f) */
 
-void config_free();
+  /* General */
+  guint    gpu_id;
+  gboolean jetson;
+  guint    perf_measurement_interval_sec;
+  gboolean wait_for_user_input;
+  gboolean enable_crop_image;
+
+  /* Per-domain structs */
+  AppSourceConfig      source;
+  AppStreamMuxConfig   streammux;
+  AppInferConfig       infer;
+  AppTrackerConfig     tracker;
+  AppOsdConfig         osd;
+  AppDisplayConfig     display;
+  AppQueueConfig       queue;
+  AppAppsinkConfig     appsink;
+  AppKafkaConfig       kafka;
+  AppFaceQualityConfig face_quality;
+  AppOsdTextConfig     osd_text;
+  AppFrameSaveConfig   frame_save;
+} AppConfig;
+
+/** Single global instance — defined in config.c */
+extern AppConfig app_config;
+
+// =============================================================================
+// Functions
+// =============================================================================
+
+gboolean parse_config_file(const gchar *config_file, GError **error);
+gint     parse_command_line(gint argc, char *argv[]);
+void     config_free(void);
 
 #ifdef __cplusplus
 }

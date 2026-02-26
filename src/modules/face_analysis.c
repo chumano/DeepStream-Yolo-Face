@@ -19,13 +19,13 @@ assess_face_quality(Landmark *landmarks, guint num_landmarks,
   gdouble confidence_sum = 0.0;
   
   for (guint i = 0; i < num_landmarks; i++) {
-    if (landmarks[i].confidence >= MIN_LANDMARK_CONFIDENCE) {
+    if (landmarks[i].confidence >= app_config.face_quality.min_landmark_confidence) {
       visible_count++;
       confidence_sum += landmarks[i].confidence;
     }
   }
   
-  if (visible_count < MIN_VISIBLE_LANDMARKS) {
+  if (visible_count < app_config.face_quality.min_visible_landmarks) {
     *is_good_face = FALSE;
     *quality_score = 0.0;
     if (metrics) {
@@ -49,9 +49,9 @@ assess_face_quality(Landmark *landmarks, guint num_landmarks,
   gboolean is_frontal = FALSE;
   gdouble frontal_score = 0.0;
   
-  if (left_eye->confidence >= MIN_LANDMARK_CONFIDENCE &&
-      right_eye->confidence >= MIN_LANDMARK_CONFIDENCE &&
-      nose->confidence >= MIN_LANDMARK_CONFIDENCE) {
+  if (left_eye->confidence >= app_config.face_quality.min_landmark_confidence &&
+      right_eye->confidence >= app_config.face_quality.min_landmark_confidence &&
+      nose->confidence >= app_config.face_quality.min_landmark_confidence) {
     
     gdouble eye_distance = sqrt(pow(right_eye->x - left_eye->x, 2) + 
                                 pow(right_eye->y - left_eye->y, 2));
@@ -62,7 +62,7 @@ assess_face_quality(Landmark *landmarks, guint num_landmarks,
       gdouble nose_offset_ratio = nose_offset_x / eye_distance;
       
       frontal_score = MAX(0.0, 1.0 - nose_offset_ratio * 2.0);
-      is_frontal = (frontal_score >= MIN_FRONTAL_SCORE);
+      is_frontal = (frontal_score >= app_config.face_quality.min_frontal_score);
     }
   }
   
@@ -77,8 +77,8 @@ assess_face_quality(Landmark *landmarks, guint num_landmarks,
     metrics->frontal_score = frontal_score;
   }
   
-  *is_good_face = (visible_count >= MIN_VISIBLE_LANDMARKS &&
-                   *quality_score >= FACE_QUALITY_THRESHOLD &&
+  *is_good_face = (visible_count >= app_config.face_quality.min_visible_landmarks &&
+                   *quality_score >= app_config.face_quality.face_quality_threshold &&
                    is_frontal);
   
   return TRUE;
@@ -106,10 +106,10 @@ extract_landmarks_from_object(NvDsObjectMeta *obj_meta, guint *num_landmarks_out
     return NULL;
   }
 
-  gfloat gain = MIN((gfloat)obj_meta->mask_params.width / STREAMMUX_WIDTH,
-                    (gfloat)obj_meta->mask_params.height / STREAMMUX_HEIGHT);
-  gfloat pad_x = (obj_meta->mask_params.width - STREAMMUX_WIDTH * gain) * 0.5f;
-  gfloat pad_y = (obj_meta->mask_params.height - STREAMMUX_HEIGHT * gain) * 0.5f;
+  gfloat gain = MIN((gfloat)obj_meta->mask_params.width / app_config.streammux.width,
+                    (gfloat)obj_meta->mask_params.height / app_config.streammux.height);
+  gfloat pad_x = (obj_meta->mask_params.width - app_config.streammux.width * gain) * 0.5f;
+  gfloat pad_y = (obj_meta->mask_params.height - app_config.streammux.height * gain) * 0.5f;
 
   Landmark *landmarks = g_malloc(sizeof(Landmark) * num_joints);
 

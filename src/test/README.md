@@ -42,6 +42,8 @@ gdb --args ./test-app
 (gdb) handle SIGSEGV nostop noprint pass
 # add a breakpoint at a specific line in gdb
 (gdb) break test.c:258
+# clear current breakpoint in gdb
+(gdb) clear
 # go into function calls in gdb
 (gdb) step
 ```

@@ -73,9 +73,9 @@ process_object(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta, NvBufSurface
 
   // Encode cropped face image if enabled
   CropBox crop_box;
-  calculate_crop_box(obj_meta, &crop_box, STREAMMUX_WIDTH, STREAMMUX_HEIGHT);
+  calculate_crop_box(obj_meta, &crop_box, app_config.streammux.width, app_config.streammux.height);
   gchar *face_image_base64 = NULL;
-  if (ENABLE_CROP_IMAGE && surface) {
+  if (app_config.enable_crop_image && surface) {
     face_image_base64 = encode_crop_to_base64_jpeg(surface, &crop_box, 85, frame_meta->batch_id);
   }
 
@@ -87,6 +87,8 @@ process_object(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta, NvBufSurface
     .object_id = obj_meta->object_id,
     .class_id = obj_meta->class_id,
     .confidence = obj_meta->confidence,
+    .frame_width = app_config.streammux.width,
+    .frame_height = app_config.streammux.height,
 
     //
     .landmarks = landmarks,
@@ -108,7 +110,7 @@ process_object(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta, NvBufSurface
   }
 
   // Process face detection and send to Kafka
-  if (KAFKA_ENABLED && detection_manager && detection_manager_is_enabled(detection_manager)) {
+  if (app_config.kafka.enabled && detection_manager && detection_manager_is_enabled(detection_manager)) {
       // Build JSON payload
       gchar *json_data = build_detection_json(&ctx);
 
@@ -133,7 +135,7 @@ set_custom_bbox(NvDsObjectMeta *obj_meta)
   gfloat y_offset = obj_meta->rect_params.top - font_size * 2 + border_width * 0.5f + 1;
 
   // Set display text to show object ID
-  g_snprintf(obj_meta->text_params.display_text, MAX_DISPLAY_LEN, "ID: %lu", obj_meta->object_id);
+  g_snprintf(obj_meta->text_params.display_text, app_config.osd_text.max_display_len, "ID: %lu", obj_meta->object_id);
 
   obj_meta->rect_params.border_width = border_width;
   obj_meta->rect_params.border_color.red = 0.0;
@@ -142,8 +144,8 @@ set_custom_bbox(NvDsObjectMeta *obj_meta)
   obj_meta->rect_params.border_color.alpha = 1.0;
   obj_meta->text_params.font_params.font_name = (gchar *) "Ubuntu";
   obj_meta->text_params.font_params.font_size = font_size;
-  obj_meta->text_params.x_offset = (guint) MIN(STREAMMUX_WIDTH - 1, MAX(0, x_offset));
-  obj_meta->text_params.y_offset = (guint) MIN(STREAMMUX_HEIGHT - 1, MAX(0, y_offset));
+  obj_meta->text_params.x_offset = (guint) MIN(app_config.streammux.width - 1, MAX(0, x_offset));
+  obj_meta->text_params.y_offset = (guint) MIN(app_config.streammux.height - 1, MAX(0, y_offset));
   obj_meta->text_params.font_params.font_color.red = 1.0;
   obj_meta->text_params.font_params.font_color.green = 1.0;
   obj_meta->text_params.font_params.font_color.blue = 1.0;
@@ -203,12 +205,12 @@ nvosd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_da
       time_t timestamp_time = (time_t)timestamp_sec;
       struct tm *tm_info = localtime(&timestamp_time);
       
-      gchar timestamp_str[MAX_DISPLAY_LEN];
+      gchar timestamp_str[128];
       strftime(timestamp_str, sizeof(timestamp_str), "%Y-%m-%d %H:%M:%S", tm_info);
       
       // Add milliseconds
       gint millisec = (gint)((timestamp_sec - (time_t)timestamp_sec) * 1000);
-      gchar full_timestamp[MAX_DISPLAY_LEN];
+      gchar full_timestamp[128];
       g_snprintf(full_timestamp, sizeof(full_timestamp), "FRAME %d, NTP: %s.%03d", frame_meta->frame_num, timestamp_str, millisec);
       
       // Configure text parameters
@@ -216,11 +218,11 @@ nvosd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_da
       display_meta->num_labels = 1;
       
       txt_params->display_text = g_strdup(full_timestamp);
-      txt_params->x_offset = NTP_TEXT_X_OFFSET;
-      txt_params->y_offset = NTP_TEXT_Y_OFFSET;
+      txt_params->x_offset = app_config.osd_text.ntp_text_x_offset;
+      txt_params->y_offset = app_config.osd_text.ntp_text_y_offset;
       
       txt_params->font_params.font_name = (gchar*)"Ubuntu";
-      txt_params->font_params.font_size = NTP_TEXT_FONT_SIZE;
+      txt_params->font_params.font_size = app_config.osd_text.ntp_text_font_size;
       txt_params->font_params.font_color.red = 1.0;
       txt_params->font_params.font_color.green = 1.0;
       txt_params->font_params.font_color.blue = 1.0;
@@ -251,10 +253,10 @@ nvosd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_da
       if (obj_meta->mask_params.data && obj_meta->mask_params.size > 0) {
         guint num_joints = obj_meta->mask_params.size / (sizeof(float) * 3);
         
-        gfloat gain = MIN((gfloat) obj_meta->mask_params.width / STREAMMUX_WIDTH, 
-                          (gfloat) obj_meta->mask_params.height / STREAMMUX_HEIGHT);
-        gfloat pad_x = (obj_meta->mask_params.width - STREAMMUX_WIDTH * gain) * 0.5f;
-        gfloat pad_y = (obj_meta->mask_params.height - STREAMMUX_HEIGHT * gain) * 0.5f;
+        gfloat gain = MIN((gfloat) obj_meta->mask_params.width / app_config.streammux.width, 
+                          (gfloat) obj_meta->mask_params.height / app_config.streammux.height);
+        gfloat pad_x = (obj_meta->mask_params.width - app_config.streammux.width * gain) * 0.5f;
+        gfloat pad_y = (obj_meta->mask_params.height - app_config.streammux.height * gain) * 0.5f;
 
         for (guint i = 0; i < num_joints; ++i) {
           gfloat xc = (obj_meta->mask_params.data[i * 3 + 0] - pad_x) / gain;
@@ -271,8 +273,8 @@ nvosd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_da
           }
 
           NvOSD_CircleParams *circle_params = &display_meta->circle_params[display_meta->num_circles];
-          circle_params->xc = (guint) MIN(STREAMMUX_WIDTH - 1, MAX(0, xc));
-          circle_params->yc = (guint) MIN(STREAMMUX_HEIGHT - 1, MAX(0, yc));
+          circle_params->xc = (guint) MIN(app_config.streammux.width - 1, MAX(0, xc));
+          circle_params->yc = (guint) MIN(app_config.streammux.height - 1, MAX(0, yc));
           circle_params->radius = 6;
           circle_params->circle_color.red = 1.0;
           circle_params->circle_color.green = 1.0;
@@ -424,13 +426,13 @@ appsink_new_sample_callback(GstElement *appsink, gpointer user_data)
 
     gchar *image_rel_path = NULL;
     // Save frame to disk if enabled
-    if (ENABLE_FRAME_SAVE && surface_valid && FRAME_SAVE_DIR) {
+    if (app_config.frame_save.enabled && surface_valid && app_config.frame_save.dir) {
      
       //if (frame_meta->frame_num % FRAME_SAVE_INTERVAL == 0) {
       // Check if frame has any detected objects (faces)
       if (frame_meta->obj_meta_list != NULL) {
         image_rel_path = save_frame_to_jpeg(surface, frame_meta,
-                          FRAME_SAVE_DIR, FRAME_SAVE_QUALITY);
+                          app_config.frame_save.dir, app_config.frame_save.quality);
         GST_DEBUG("Saved frame %d to %s",
                   frame_meta->frame_num,
                   image_rel_path ? image_rel_path : "NULL");
@@ -480,11 +482,11 @@ uridecodebin_child_added_callback(GstChildProxy *child_proxy, GObject *object, g
   }
   else if (g_strrstr(name, "nvv4l2decoder")) {
     g_object_set(object, "drop-frame-interval", 0, "num-extra-surfaces", 1, "qos", 0, NULL);
-    if (JETSON) {
+    if (app_config.jetson) {
       g_object_set(object, "enable-max-performance", 1, NULL);
     }
     else {
-      g_object_set(object, "cudadec-memtype", 0, "gpu-id", GPU_ID, NULL);
+      g_object_set(object, "cudadec-memtype", 0, "gpu-id", app_config.gpu_id, NULL);
     }
   }
 }
@@ -565,29 +567,29 @@ detection_manager_process_pending_callback(gpointer user_data)
 static void
 init_detection_manager(void)
 {
-  if (!KAFKA_ENABLED) {
+  if (!app_config.kafka.enabled) {
     detection_manager = detection_manager_new(FALSE, NULL, NULL,
-                                             KAFKA_SEND_DELAY_SEC,
-                                             KAFKA_QUALITY_IMPROVEMENT_THRESHOLD,
-                                             KAFKA_CLEANUP_INTERVAL_SEC,
-                                             KAFKA_SENT_RECORD_TTL_SEC,
-                                             KAFKA_PENDING_TTL_SEC);
+                                             app_config.kafka.send_delay_sec,
+                                             app_config.kafka.quality_improvement_threshold,
+                                             app_config.kafka.cleanup_interval_sec,
+                                             app_config.kafka.sent_record_ttl_sec,
+                                             app_config.kafka.pending_ttl_sec);
     return;
   }
   
-  detection_manager = detection_manager_new(TRUE, KAFKA_BROKER, KAFKA_TOPIC,
-                                           KAFKA_SEND_DELAY_SEC,
-                                           KAFKA_QUALITY_IMPROVEMENT_THRESHOLD,
-                                           KAFKA_CLEANUP_INTERVAL_SEC,
-                                           KAFKA_SENT_RECORD_TTL_SEC,
-                                           KAFKA_PENDING_TTL_SEC);
+  detection_manager = detection_manager_new(TRUE, app_config.kafka.broker, app_config.kafka.topic,
+                                           app_config.kafka.send_delay_sec,
+                                           app_config.kafka.quality_improvement_threshold,
+                                           app_config.kafka.cleanup_interval_sec,
+                                           app_config.kafka.sent_record_ttl_sec,
+                                           app_config.kafka.pending_ttl_sec);
   
   if (!detection_manager_init_kafka(detection_manager)) {
     GST_WARNING("WARNING - Failed to initialize Kafka, running without Kafka\n");
   }
   
   GST_DEBUG("Detection manager initialized (Kafka: %s, Topic: %s)\n",
-          KAFKA_BROKER, KAFKA_TOPIC);
+          app_config.kafka.broker, app_config.kafka.topic);
 }
 
 static void
@@ -624,56 +626,55 @@ main(gint argc, char *argv[])
   GST_INFO("\n");
   // Debug: Print what was actually parsed
   GST_INFO("DEBUG - After parsing:\n");
-  //GST_INFO("SOURCE: %s", SOURCE);
-  GST_INFO("  NUM_SOURCES: %d", NUM_SOURCES);
-  if (SOURCES) {
-    for (guint i = 0; i < NUM_SOURCES; i++) {
-      GST_INFO("  SOURCES[%d]: %s", i, SOURCES[i]);
+  GST_INFO("  NUM_SOURCES: %d", app_config.source.count);
+  if (app_config.source.uris) {
+    for (guint i = 0; i < app_config.source.count; i++) {
+      GST_INFO("  SOURCES[%d]: %s", i, app_config.source.uris[i]);
     }
   } else {
     GST_INFO("  SOURCES: (null)");
   }
-  GST_INFO("INFER_CONFIG: %s", INFER_CONFIG);
-  GST_INFO("STREAMMUX_BATCH_SIZE: %d", STREAMMUX_BATCH_SIZE);
-  GST_INFO("STREAMMUX_WIDTH: %d", STREAMMUX_WIDTH);
-  GST_INFO("STREAMMUX_HEIGHT: %d", STREAMMUX_HEIGHT);
-  GST_INFO("GPU_ID: %d", GPU_ID);
-  GST_INFO("PERF_MEASUREMENT_INTERVAL_SEC: %d", PERF_MEASUREMENT_INTERVAL_SEC);
-  GST_INFO("JETSON: %s", JETSON ? "TRUE" : "FALSE");
-  GST_INFO("USE_TRITON: %s", USE_TRITON ? "TRUE" : "FALSE");
-  if (KAFKA_ENABLED) {
-    GST_INFO("KAFKA_BROKER: %s", KAFKA_BROKER);
-    GST_INFO("KAFKA_TOPIC: %s", KAFKA_TOPIC);
-    GST_INFO("KAFKA_SEND_DELAY_SEC: %.1f", KAFKA_SEND_DELAY_SEC);
-    GST_INFO("KAFKA_QUALITY_IMPROVEMENT_THRESHOLD: %.2f", KAFKA_QUALITY_IMPROVEMENT_THRESHOLD);
+  GST_INFO("INFER_CONFIG: %s", app_config.infer.config_file);
+  GST_INFO("STREAMMUX_BATCH_SIZE: %d", app_config.streammux.batch_size);
+  GST_INFO("STREAMMUX_WIDTH: %d",      app_config.streammux.width);
+  GST_INFO("STREAMMUX_HEIGHT: %d",     app_config.streammux.height);
+  GST_INFO("GPU_ID: %d",               app_config.gpu_id);
+  GST_INFO("PERF_MEASUREMENT_INTERVAL_SEC: %d", app_config.perf_measurement_interval_sec);
+  GST_INFO("JETSON: %s",     app_config.jetson      ? "TRUE" : "FALSE");
+  GST_INFO("USE_TRITON: %s", app_config.infer.use_triton ? "TRUE" : "FALSE");
+  if (app_config.kafka.enabled) {
+    GST_INFO("KAFKA_BROKER: %s",                         app_config.kafka.broker);
+    GST_INFO("KAFKA_TOPIC: %s",                          app_config.kafka.topic);
+    GST_INFO("KAFKA_SEND_DELAY_SEC: %.1f",               app_config.kafka.send_delay_sec);
+    GST_INFO("KAFKA_QUALITY_IMPROVEMENT_THRESHOLD: %.2f",app_config.kafka.quality_improvement_threshold);
   }
-  GST_INFO("ENABLE_CROP_IMAGE: %s", ENABLE_CROP_IMAGE ? "TRUE" : "FALSE");
-  if (ENABLE_FRAME_SAVE) {
-    GST_INFO("FRAME_SAVE_DIR: %s", FRAME_SAVE_DIR);
-    GST_INFO("FRAME_SAVE_QUALITY: %u", FRAME_SAVE_QUALITY);
+  GST_INFO("ENABLE_CROP_IMAGE: %s", app_config.enable_crop_image ? "TRUE" : "FALSE");
+  if (app_config.frame_save.enabled) {
+    GST_INFO("FRAME_SAVE_DIR: %s",     app_config.frame_save.dir);
+    GST_INFO("FRAME_SAVE_QUALITY: %u", app_config.frame_save.quality);
   }
   GST_INFO("\n");
 
   // wait user to press enter key to start
-  if (WAIT_FOR_USER_INPUT) {
+  if (app_config.wait_for_user_input) {
     g_print("Press ENTER to start processing ...\n");
     getchar();
   }
  
   // ============================================================================
   // Initialize frame save directory if enabled
-  if (ENABLE_FRAME_SAVE) {
-    if (!FRAME_SAVE_DIR) {
-      FRAME_SAVE_DIR = g_strdup("/app/outputs/frames");
+  if (app_config.frame_save.enabled) {
+    if (!app_config.frame_save.dir) {
+      app_config.frame_save.dir = g_strdup("/app/outputs/frames");
     }
     
-    if (!ensure_frame_save_directory(FRAME_SAVE_DIR)) {
-      g_printerr("ERROR - Failed to create frame save directory: %s\n", FRAME_SAVE_DIR);
+    if (!ensure_frame_save_directory(app_config.frame_save.dir)) {
+      g_printerr("ERROR - Failed to create frame save directory: %s\n", app_config.frame_save.dir);
       return -1;
     }
     
     GST_INFO("Frame saving enabled: dir=%s, quality=%u", 
-            FRAME_SAVE_DIR, FRAME_SAVE_QUALITY);
+            app_config.frame_save.dir, app_config.frame_save.quality);
   }
   // ============================================================================
 
@@ -684,13 +685,13 @@ main(gint argc, char *argv[])
   cudaGetDeviceProperties(&prop, current_device);
 
   if (prop.integrated) {
-    JETSON = TRUE;
+    app_config.jetson = TRUE;
   }
 
   // ============================================================================
   // Initialize pipeline monitor
   GST_INFO("Initializing pipeline monitor...");
-  pipeline_monitor = pipeline_monitor_new(PERF_MEASUREMENT_INTERVAL_SEC, NUM_SOURCES);
+  pipeline_monitor = pipeline_monitor_new(app_config.perf_measurement_interval_sec, app_config.source.count);
   if (!pipeline_monitor) {
     g_printerr("WARNING - Failed to create pipeline monitor, continuing without metrics\n");
   }
@@ -706,7 +707,7 @@ main(gint argc, char *argv[])
   g_timeout_add(400, check_for_interrupt, &loop);
 
   // Start periodic check for pending detections
-  if (KAFKA_ENABLED && detection_manager) {
+  if (app_config.kafka.enabled && detection_manager) {
     g_timeout_add(500, detection_manager_process_pending_callback, NULL);
   }
 
@@ -730,8 +731,8 @@ main(gint argc, char *argv[])
   //   g_printerr("ERROR - Failed to create uridecodebin\n");
   //   return -1;
   // }
-  for (guint i = 0; i < NUM_SOURCES; i++) {
-    GstElement *uridecodebin = create_uridecodebin(i, SOURCES[i], nvstreammux);
+  for (guint i = 0; i < app_config.source.count; i++) {
+    GstElement *uridecodebin = create_uridecodebin(i, app_config.source.uris[i], nvstreammux);
     if (!uridecodebin || !gst_bin_add(GST_BIN(pipeline), uridecodebin)) {
       g_printerr("ERROR - Failed to create uridecodebin for source %d\n", i);
       return -1;
@@ -739,10 +740,10 @@ main(gint argc, char *argv[])
   }
 
   GstElement *nvinfer = gst_element_factory_make(
-      USE_TRITON ? "nvinferserver" : "nvinfer",
-      USE_TRITON ? "nvinferserver" : "nvinfer");
+      app_config.infer.use_triton ? "nvinferserver" : "nvinfer",
+      app_config.infer.use_triton ? "nvinferserver" : "nvinfer");
   if (!nvinfer || !gst_bin_add(GST_BIN(pipeline), nvinfer)) {
-    g_printerr("ERROR - Failed to create %s\n", USE_TRITON ? "nvinferserver" : "nvinfer");
+    g_printerr("ERROR - Failed to create %s\n", app_config.infer.use_triton ? "nvinferserver" : "nvinfer");
     return -1;
   }
 
@@ -778,7 +779,7 @@ main(gint argc, char *argv[])
   GstElement *queue_display = NULL;
   GstElement *nvosd  = NULL;
   GstElement *nvsink = NULL;
-  if (!DISABLE_DISPLAY) {
+  if (!app_config.display.disabled) {
     // queue
     queue_display = gst_element_factory_make("queue", "queue_display");
     if (!queue_display || !gst_bin_add(GST_BIN(pipeline), queue_display)) {
@@ -787,8 +788,8 @@ main(gint argc, char *argv[])
     }
     
     g_object_set(G_OBJECT(queue_display),
-        "max-size-buffers", 5,
-        "leaky", 2, // Leaky on downstream (old buffers)
+        "max-size-buffers", app_config.queue.max_size_buffers,
+        "leaky", app_config.queue.leaky,
         NULL);
 
     if (pipeline_monitor) {
@@ -802,16 +803,16 @@ main(gint argc, char *argv[])
       return -1;
     }
     
-    g_object_set(G_OBJECT(nvosd), "process-mode", MODE_GPU, "qos", 0, NULL);
+    g_object_set(G_OBJECT(nvosd), "process-mode", app_config.osd.process_mode, "qos", (gint)app_config.osd.qos, NULL);
     
-    if (!JETSON) {
-      g_object_set(G_OBJECT(nvosd), "gpu_id", GPU_ID, NULL);
+    if (!app_config.jetson) {
+      g_object_set(G_OBJECT(nvosd), "gpu_id", app_config.gpu_id, NULL);
     }
 
 
 
     // display sink
-    if (JETSON) {
+    if (app_config.jetson) {
       nvsink = gst_element_factory_make("nv3dsink", "nv3dsink");
       if (!nvsink || !gst_bin_add(GST_BIN(pipeline), nvsink)) {
         g_printerr("ERROR - Failed to create nv3dsink\n");
@@ -827,8 +828,8 @@ main(gint argc, char *argv[])
     }
     
     // Configure display sink
-    g_object_set(G_OBJECT(nvsink), "async", 0, "sync", 0, "qos", 0, NULL);
-    g_object_set(G_OBJECT(nvsink), "window-width", 400, "window-height", 400, NULL);
+    g_object_set(G_OBJECT(nvsink), "async", (gint)app_config.display.async_sink, "sync", (gint)app_config.display.sync, "qos", (gint)app_config.display.qos, NULL);
+    g_object_set(G_OBJECT(nvsink), "window-width", app_config.display.window_width, "window-height", app_config.display.window_height, NULL);
   }
 
   //================================================
@@ -839,8 +840,8 @@ main(gint argc, char *argv[])
   }
 
   g_object_set(G_OBJECT(queue_app),
-    "max-size-buffers", 5,
-    "leaky", 2, // Leaky on downstream (old buffers)
+    "max-size-buffers", app_config.queue.max_size_buffers,
+    "leaky", app_config.queue.leaky,
     NULL);
 
   // Register queues with the pipeline monitor
@@ -856,10 +857,10 @@ main(gint argc, char *argv[])
 
   // Configure appsink
   g_object_set(G_OBJECT(appsink),
-    "emit-signals", TRUE,      // appsink sẽ phát ra một tín hiệu mỗi khi có buffer mới đến. Bạn có thể kết nối hàm xử lý của mình với tín hiệu này bằng g_signal_connect.
-    "sync", FALSE,             // Don't sync to clock
-    "max-buffers", 5,          // Keep only 5 buffers to avoid memory buildup
-    "drop", TRUE,              // Drop old buffers if queue is full
+    "emit-signals", TRUE,
+    "sync", (gint)app_config.appsink.sync,
+    "max-buffers", app_config.appsink.max_buffers,
+    "drop", (gint)app_config.appsink.drop,
     NULL);
   // Connect callback to appsink
   g_signal_connect(appsink, "new-sample", G_CALLBACK(appsink_new_sample_callback), NULL);
@@ -870,22 +871,22 @@ main(gint argc, char *argv[])
   gst_caps_unref(caps);
 
   g_object_set(G_OBJECT(nvstreammux),
-     "batch-size", STREAMMUX_BATCH_SIZE,
-     "batched-push-timeout", 25000, // in microseconds
-     "width", STREAMMUX_WIDTH, "height", STREAMMUX_HEIGHT, "live-source", 1, NULL);
-  g_object_set(G_OBJECT(nvinfer), "config-file-path", INFER_CONFIG, "qos", 0, NULL);
-  g_object_set(G_OBJECT(nvtracker), "tracker-width", 640, "tracker-height", 384,
-      "ll-lib-file", "/opt/nvidia/deepstream/deepstream/lib/libnvds_nvmultiobjecttracker.so",
-      "ll-config-file", "/opt/nvidia/deepstream/deepstream/samples/configs/deepstream-app/config_tracker_NvDCF_perf.yml",
-      "gpu-id", GPU_ID, "display-tracking-id", 1, NULL);
+     "batch-size", app_config.streammux.batch_size,
+     "batched-push-timeout", app_config.streammux.batched_push_timeout,
+     "width", app_config.streammux.width, "height", app_config.streammux.height, "live-source", 1, NULL);
+  g_object_set(G_OBJECT(nvinfer), "config-file-path", app_config.infer.config_file, "qos", (gint)app_config.infer.qos, NULL);
+  g_object_set(G_OBJECT(nvtracker), "tracker-width", app_config.tracker.width, "tracker-height", app_config.tracker.height,
+      "ll-lib-file", app_config.tracker.ll_lib_file,
+      "ll-config-file", app_config.tracker.ll_config_file,
+      "gpu-id", app_config.gpu_id, "display-tracking-id", (gint)app_config.tracker.display_tracking_id, NULL);
 
   // if (g_strrstr(SOURCE, "file://")) {
   //   g_object_set(G_OBJECT(nvstreammux), "live-source", 0, NULL);
   // }
   // Check if all sources are file-based (non-live)
   gboolean all_file_sources = TRUE;
-  for (guint i = 0; i < NUM_SOURCES; i++) {
-    if (!g_strrstr(SOURCES[i], "file://")) {
+  for (guint i = 0; i < app_config.source.count; i++) {
+    if (!g_strrstr(app_config.source.uris[i], "file://")) {
       all_file_sources = FALSE;
       break;
     }
@@ -895,12 +896,12 @@ main(gint argc, char *argv[])
     g_object_set(G_OBJECT(nvstreammux), "live-source", 0, NULL);
   }
 
-  if (!JETSON) {
-    g_object_set(G_OBJECT(nvstreammux), "nvbuf-memory-type", NVBUF_MEM_CUDA_DEVICE, "gpu_id", GPU_ID, NULL);
-    if (!USE_TRITON) {
-      g_object_set(G_OBJECT(nvinfer), "gpu_id", GPU_ID, NULL);
+  if (!app_config.jetson) {
+    g_object_set(G_OBJECT(nvstreammux), "nvbuf-memory-type", NVBUF_MEM_CUDA_DEVICE, "gpu_id", app_config.gpu_id, NULL);
+    if (!app_config.infer.use_triton) {
+      g_object_set(G_OBJECT(nvinfer), "gpu_id", app_config.gpu_id, NULL);
     }
-    g_object_set(G_OBJECT(nvvidconv), "nvbuf-memory-type", NVBUF_MEM_CUDA_DEVICE, "gpu_id", GPU_ID, NULL);
+    g_object_set(G_OBJECT(nvvidconv), "nvbuf-memory-type", NVBUF_MEM_CUDA_DEVICE, "gpu_id", app_config.gpu_id, NULL);
   }
 
   //==============================================
@@ -919,7 +920,7 @@ main(gint argc, char *argv[])
 
   // Link display branch (conditional)
  
-  if (!DISABLE_DISPLAY) {
+  if (!app_config.display.disabled) {
      // Link: tee -> queue_display -> nvosd -> nvsink
     if (!gst_element_link_many(tee, queue_display, nvosd, nvsink, NULL)) {
       g_printerr("ERROR - Failed to link tee to display sink\n");
@@ -951,7 +952,7 @@ main(gint argc, char *argv[])
   NvDsAppPerfStructInt *perf_struct = (NvDsAppPerfStructInt *) g_malloc0(sizeof(NvDsAppPerfStructInt)); 
   
   GstPad *perf_pad = NULL;
-  if(!DISABLE_DISPLAY) {
+  if(!app_config.display.disabled) {
     GstPad *nvosd_sink_pad = gst_element_get_static_pad(nvosd, "sink");
     perf_pad = nvosd_sink_pad;
     if (!nvosd_sink_pad) {
@@ -970,7 +971,7 @@ main(gint argc, char *argv[])
     }
   }
   
-  enable_perf_measurement(perf_struct, perf_pad, NUM_SOURCES, PERF_MEASUREMENT_INTERVAL_SEC, 0, perf_cb);
+  enable_perf_measurement(perf_struct, perf_pad, app_config.source.count, app_config.perf_measurement_interval_sec, 0, perf_cb);
 
   // ===============================================
   // Start the pipeline

@@ -19,7 +19,7 @@ build_detection_json(FaceContext *ctx)
 
   // Frame info
   g_string_append_printf(json, "\"frame_size\":{\"width\":%d,\"height\":%d},",
-                         STREAMMUX_WIDTH, STREAMMUX_HEIGHT);
+                         ctx->frame_width, ctx->frame_height);
   g_string_append_printf(json, "\"frame_number\":%u,", ctx->frame_num);
 
   // Bounding boxes

@@ -1,302 +1,457 @@
 #include "config.h"
 
-// Global variable definitions
-gchar *CONFIG_FILE = NULL;
-//gchar *SOURCE = NULL;
-gchar **SOURCES = NULL;
-guint NUM_SOURCES = 0;
+// =============================================================================
+// Global AppConfig instance with compile-time defaults
+// =============================================================================
 
-gchar *INFER_CONFIG = NULL;
-guint STREAMMUX_BATCH_SIZE = 1;
-guint STREAMMUX_WIDTH = 1920;
-guint STREAMMUX_HEIGHT = 1080;
-guint GPU_ID = 0;
+AppConfig app_config = {
+  .config_file = NULL,
 
-guint PERF_MEASUREMENT_INTERVAL_SEC = 5;
-gboolean JETSON = FALSE;
+  /* General */
+  .gpu_id                        = 0,
+  .jetson                        = FALSE,
+  .perf_measurement_interval_sec = 5,
+  .wait_for_user_input           = TRUE,
+  .enable_crop_image             = TRUE,
 
-// Kafka settings
-gchar *KAFKA_BROKER = NULL;
-gchar *KAFKA_TOPIC = NULL;
-gboolean KAFKA_ENABLED = FALSE;
-gdouble KAFKA_SEND_DELAY_SEC = 2.0;
-gdouble KAFKA_QUALITY_IMPROVEMENT_THRESHOLD = 0.005;
-gdouble KAFKA_SENT_RECORD_TTL_SEC = 60.0;
-gdouble KAFKA_PENDING_TTL_SEC = 10.0;
-gdouble KAFKA_CLEANUP_INTERVAL_SEC = 30.0;
+  /* Sources */
+  .source = {
+    .uris  = NULL,
+    .count = 0,
+  },
 
-// Face quality thresholds
-gdouble MIN_LANDMARK_CONFIDENCE = 0.5;
-guint MIN_VISIBLE_LANDMARKS = 3;
-gdouble FACE_QUALITY_THRESHOLD = 0.6;
-//gdouble MAX_HEAD_ROTATION_ANGLE = 25.0;
-gdouble MIN_FRONTAL_SCORE = 0.7;
+  /* nvstreammux */
+  .streammux = {
+    .batch_size            = 1,
+    .width                 = 1920,
+    .height                = 1080,
+    .batched_push_timeout  = 25000,  /* µs */
+  },
 
-// Crop image support
-gboolean ENABLE_CROP_IMAGE = TRUE;
+  /* nvinfer / nvinferserver */
+  .infer = {
+    .config_file = NULL,
+    .use_triton  = FALSE,
+    .qos         = FALSE,
+  },
 
-// Display settings
-gboolean DISABLE_DISPLAY = FALSE;
+  /* nvtracker */
+  .tracker = {
+    .width               = 640,
+    .height              = 384,
+    .ll_lib_file         = NULL,  /* set at runtime after detecting Jetson */
+    .ll_config_file      = NULL,
+    .display_tracking_id = TRUE,
+  },
 
-// Frame saving settings
-gboolean ENABLE_FRAME_SAVE = TRUE;
-gchar *FRAME_SAVE_DIR = NULL;
-guint FRAME_SAVE_QUALITY = 70; // JPEG quality (0-100)
+  /* nvdsosd */
+  .osd = {
+    .process_mode = 1,   /* MODE_GPU */
+    .qos          = FALSE,
+  },
 
-int MAX_DISPLAY_LEN = 128;
-int NTP_TEXT_X_OFFSET = 30;
-int NTP_TEXT_Y_OFFSET = 30;
-int NTP_TEXT_FONT_SIZE = 20;
+  /* Display sink */
+  .display = {
+    .disabled      = FALSE,
+    .window_width  = 400,
+    .window_height = 400,
+    .sync          = FALSE,
+    .async_sink    = FALSE,
+    .qos           = FALSE,
+  },
 
-gboolean WAIT_FOR_USER_INPUT = TRUE;
+  /* Shared queue settings */
+  .queue = {
+    .max_size_buffers = 5,
+    .leaky            = 2,  /* downstream */
+  },
 
-// Triton / nvinferserver
-gboolean USE_TRITON = FALSE;
+  /* appsink */
+  .appsink = {
+    .max_buffers = 5,
+    .drop        = TRUE,
+    .sync        = FALSE,
+  },
+
+  /* Kafka */
+  .kafka = {
+    .enabled                      = FALSE,
+    .broker                       = NULL,
+    .topic                        = NULL,
+    .send_delay_sec               = 2.0,
+    .quality_improvement_threshold = 0.005,
+    .sent_record_ttl_sec          = 60.0,
+    .pending_ttl_sec              = 10.0,
+    .cleanup_interval_sec         = 30.0,
+  },
+
+  /* Face quality */
+  .face_quality = {
+    .min_landmark_confidence = 0.5,
+    .min_visible_landmarks   = 3,
+    .face_quality_threshold  = 0.6,
+    .min_frontal_score       = 0.7,
+  },
+
+  /* OSD text overlay */
+  .osd_text = {
+    .max_display_len   = 128,
+    .ntp_text_x_offset = 30,
+    .ntp_text_y_offset = 30,
+    .ntp_text_font_size = 20,
+  },
+
+  /* Frame save */
+  .frame_save = {
+    .enabled = TRUE,
+    .dir     = NULL,
+    .quality = 70,
+  },
+};
+
+
+// =============================================================================
+// INI parsing helpers — reads multiple named sections
+// =============================================================================
 
 gboolean
 parse_config_file(const gchar *config_file, GError **error)
 {
-  GKeyFile *keyfile = g_key_file_new();
-  
-  if (!g_key_file_load_from_file(keyfile, config_file, G_KEY_FILE_NONE, error)) {
-    g_key_file_free(keyfile);
+  GKeyFile *kf = g_key_file_new();
+
+  if (!g_key_file_load_from_file(kf, config_file, G_KEY_FILE_NONE, error)) {
+    g_key_file_free(kf);
     return FALSE;
   }
-  
-  GError *key_error = NULL;
-  
-  // Helper macro to safely get string values
-  #define GET_STRING(key, var) \
-    do { \
-      gchar *val = g_key_file_get_string(keyfile, "settings", key, &key_error); \
-      if (val && !key_error) { \
-        if (var) g_free(var); \
-        var = val; \
-      } else if (key_error) { \
-        g_clear_error(&key_error); \
-      } \
-    } while(0)
-  
-  // Helper macro to safely get string array values
-  #define GET_STRING_ARRAY(key, var, num_var) \
-    do { \
-      gsize length = 0; \
-      gchar **val = g_key_file_get_string_list(keyfile, "settings", key, &length, &key_error); \
-      if (val && !key_error) { \
-        if (var) g_strfreev(var); \
-        var = val; \
-        num_var = length; \
-      } else if (key_error) { \
-        g_clear_error(&key_error); \
-      } \
-    } while(0)
-  
-  // Helper macro to safely get integer values
-  #define GET_INT(key, var) \
-    do { \
-      gint val = g_key_file_get_integer(keyfile, "settings", key, &key_error); \
-      if (!key_error) { \
-        var = val; \
-      } else { \
-        g_clear_error(&key_error); \
-      } \
-    } while(0)
-  
-  // Helper macro to safely get double values
-  #define GET_DOUBLE(key, var) \
-    do { \
-      gdouble val = g_key_file_get_double(keyfile, "settings", key, &key_error); \
-      if (!key_error) { \
-        var = val; \
-      } else { \
-        g_clear_error(&key_error); \
-      } \
-    } while(0)
-  
-  // Helper macro to safely get boolean values
-  #define GET_BOOLEAN(key, var) \
-    do { \
-      gboolean val = g_key_file_get_boolean(keyfile, "settings", key, &key_error); \
-      if (!key_error) { \
-        var = val; \
-      } else { \
-        g_clear_error(&key_error); \
-      } \
-    } while(0)
-  
-  // Load basic settings
-  GET_STRING_ARRAY("sources", SOURCES, NUM_SOURCES);
-  GET_STRING("infer-config", INFER_CONFIG);
-  GET_INT("streammux-batch-size", STREAMMUX_BATCH_SIZE);
-  GET_INT("streammux-width", STREAMMUX_WIDTH);
-  GET_INT("streammux-height", STREAMMUX_HEIGHT);
-  GET_INT("gpu-id", GPU_ID);
-  GET_INT("perf-measurement-interval", PERF_MEASUREMENT_INTERVAL_SEC);
-  
-  // Load Kafka settings
-  GET_STRING("kafka-broker", KAFKA_BROKER);
-  GET_STRING("kafka-topic", KAFKA_TOPIC);
-  GET_DOUBLE("kafka-delay", KAFKA_SEND_DELAY_SEC);
-  GET_DOUBLE("kafka-quality-threshold", KAFKA_QUALITY_IMPROVEMENT_THRESHOLD);
-  GET_DOUBLE("kafka-sent-record-ttl", KAFKA_SENT_RECORD_TTL_SEC);
-  GET_DOUBLE("kafka-pending-ttl", KAFKA_PENDING_TTL_SEC);
-  GET_DOUBLE("kafka-cleanup-interval", KAFKA_CLEANUP_INTERVAL_SEC);
-  
-  // Load face quality thresholds
-  GET_DOUBLE("min-landmark-confidence", MIN_LANDMARK_CONFIDENCE);
-  GET_INT("min-visible-landmarks", MIN_VISIBLE_LANDMARKS);
-  GET_DOUBLE("face-quality-threshold", FACE_QUALITY_THRESHOLD);
-  GET_DOUBLE("min-frontal-score", MIN_FRONTAL_SCORE);
-  
-  // Load crop and display settings
-  GET_BOOLEAN("enable-crop-image", ENABLE_CROP_IMAGE);
-  GET_BOOLEAN("disable-display", DISABLE_DISPLAY);
-  
-  // Load frame saving settings
-  GET_BOOLEAN("enable-frame-save", ENABLE_FRAME_SAVE);
-  GET_STRING("frame-save-dir", FRAME_SAVE_DIR);
-  GET_INT("frame-save-quality", FRAME_SAVE_QUALITY);
-  
-  // Load misc settings
-  GET_BOOLEAN("wait-for-user-input", WAIT_FOR_USER_INPUT);
-  GET_BOOLEAN("use-triton", USE_TRITON);
-  
-  #undef GET_STRING
-  #undef GET_STRING_ARRAY
-  #undef GET_INT
-  #undef GET_DOUBLE
-  #undef GET_BOOLEAN
-  
-  g_key_file_free(keyfile);
+
+  GError *ke = NULL;   /* per-key error — cleared after each lookup */
+
+/* Convenience macros — section-aware */
+#define GET_STR(sec, key, var) \
+  do { \
+    gchar *_v = g_key_file_get_string(kf, sec, key, &ke); \
+    if (_v && !ke) { g_free(var); var = _v; } \
+    else { g_clear_error(&ke); } \
+  } while (0)
+
+#define GET_STR_ARRAY(sec, key, var, cnt) \
+  do { \
+    gsize _len = 0; \
+    gchar **_v = g_key_file_get_string_list(kf, sec, key, &_len, &ke); \
+    if (_v && !ke) { g_strfreev(var); var = _v; cnt = (guint)_len; } \
+    else { g_clear_error(&ke); } \
+  } while (0)
+
+#define GET_INT(sec, key, var) \
+  do { \
+    gint _v = g_key_file_get_integer(kf, sec, key, &ke); \
+    if (!ke) { var = (typeof(var))_v; } else { g_clear_error(&ke); } \
+  } while (0)
+
+#define GET_DBL(sec, key, var) \
+  do { \
+    gdouble _v = g_key_file_get_double(kf, sec, key, &ke); \
+    if (!ke) { var = _v; } else { g_clear_error(&ke); } \
+  } while (0)
+
+#define GET_BOOL(sec, key, var) \
+  do { \
+    gboolean _v = g_key_file_get_boolean(kf, sec, key, &ke); \
+    if (!ke) { var = _v; } else { g_clear_error(&ke); } \
+  } while (0)
+
+  /* ── [app] ──────────────────────────────────────────────── */
+  GET_INT ("app", "gpu-id",                   app_config.gpu_id);
+  GET_INT ("app", "perf-measurement-interval",app_config.perf_measurement_interval_sec);
+  GET_BOOL("app", "wait-for-user-input",      app_config.wait_for_user_input);
+  GET_BOOL("app", "enable-crop-image",        app_config.enable_crop_image);
+
+  /* ── [sources] ──────────────────────────────────────────── */
+  GET_STR_ARRAY("sources", "uris", app_config.source.uris, app_config.source.count);
+
+  /* ── [streammux] ─────────────────────────────────────────── */
+  GET_INT("streammux", "batch-size",           app_config.streammux.batch_size);
+  GET_INT("streammux", "width",                app_config.streammux.width);
+  GET_INT("streammux", "height",               app_config.streammux.height);
+  GET_INT("streammux", "batched-push-timeout", app_config.streammux.batched_push_timeout);
+
+  /* ── [infer] ─────────────────────────────────────────────── */
+  GET_STR ("infer", "config-file", app_config.infer.config_file);
+  GET_BOOL("infer", "use-triton",  app_config.infer.use_triton);
+  GET_BOOL("infer", "qos",         app_config.infer.qos);
+
+  /* ── [tracker] ───────────────────────────────────────────── */
+  GET_INT ("tracker", "width",                app_config.tracker.width);
+  GET_INT ("tracker", "height",               app_config.tracker.height);
+  GET_STR ("tracker", "ll-lib-file",          app_config.tracker.ll_lib_file);
+  GET_STR ("tracker", "ll-config-file",       app_config.tracker.ll_config_file);
+  GET_BOOL("tracker", "display-tracking-id",  app_config.tracker.display_tracking_id);
+
+  /* ── [osd] ───────────────────────────────────────────────── */
+  GET_INT ("osd", "process-mode", app_config.osd.process_mode);
+  GET_BOOL("osd", "qos",          app_config.osd.qos);
+
+  /* ── [display] ───────────────────────────────────────────── */
+  GET_BOOL("display", "disabled",      app_config.display.disabled);
+  GET_INT ("display", "window-width",  app_config.display.window_width);
+  GET_INT ("display", "window-height", app_config.display.window_height);
+  GET_BOOL("display", "sync",          app_config.display.sync);
+  GET_BOOL("display", "async",         app_config.display.async_sink);
+  GET_BOOL("display", "qos",           app_config.display.qos);
+
+  /* ── [queue] ─────────────────────────────────────────────── */
+  GET_INT("queue", "max-size-buffers", app_config.queue.max_size_buffers);
+  GET_INT("queue", "leaky",            app_config.queue.leaky);
+
+  /* ── [appsink] ───────────────────────────────────────────── */
+  GET_INT ("appsink", "max-buffers", app_config.appsink.max_buffers);
+  GET_BOOL("appsink", "drop",        app_config.appsink.drop);
+  GET_BOOL("appsink", "sync",        app_config.appsink.sync);
+
+  /* ── [kafka] ─────────────────────────────────────────────── */
+  GET_STR ("kafka", "broker",             app_config.kafka.broker);
+  GET_STR ("kafka", "topic",              app_config.kafka.topic);
+  GET_DBL ("kafka", "delay",              app_config.kafka.send_delay_sec);
+  GET_DBL ("kafka", "quality-threshold",  app_config.kafka.quality_improvement_threshold);
+  GET_DBL ("kafka", "sent-record-ttl",    app_config.kafka.sent_record_ttl_sec);
+  GET_DBL ("kafka", "pending-ttl",        app_config.kafka.pending_ttl_sec);
+  GET_DBL ("kafka", "cleanup-interval",   app_config.kafka.cleanup_interval_sec);
+
+  /* ── [face_quality] ──────────────────────────────────────── */
+  GET_DBL ("face_quality", "min-landmark-confidence", app_config.face_quality.min_landmark_confidence);
+  GET_INT ("face_quality", "min-visible-landmarks",   app_config.face_quality.min_visible_landmarks);
+  GET_DBL ("face_quality", "face-quality-threshold",  app_config.face_quality.face_quality_threshold);
+  GET_DBL ("face_quality", "min-frontal-score",       app_config.face_quality.min_frontal_score);
+
+  /* ── [osd_text] ──────────────────────────────────────────── */
+  GET_INT("osd_text", "max-display-len",    app_config.osd_text.max_display_len);
+  GET_INT("osd_text", "ntp-text-x-offset",  app_config.osd_text.ntp_text_x_offset);
+  GET_INT("osd_text", "ntp-text-y-offset",  app_config.osd_text.ntp_text_y_offset);
+  GET_INT("osd_text", "ntp-text-font-size", app_config.osd_text.ntp_text_font_size);
+
+  /* ── [frame_save] ────────────────────────────────────────── */
+  GET_BOOL("frame_save", "enabled", app_config.frame_save.enabled);
+  GET_STR ("frame_save", "dir",     app_config.frame_save.dir);
+  GET_INT ("frame_save", "quality", app_config.frame_save.quality);
+
+#undef GET_STR
+#undef GET_STR_ARRAY
+#undef GET_INT
+#undef GET_DBL
+#undef GET_BOOL
+
+  g_key_file_free(kf);
   return TRUE;
 }
 
-GOptionEntry entries[] = {
-  {"config", 'f', 0, G_OPTION_ARG_STRING, &CONFIG_FILE, "Configuration file", NULL},
-  {"source", 's', 0, G_OPTION_ARG_STRING_ARRAY, &SOURCES, "Source streams/files (can specify multiple -s)", NULL},
-  {"infer-config", 'c', 0, G_OPTION_ARG_STRING, &INFER_CONFIG, "Config infer file", NULL},
-  {"streammux-batch-size", 'b', 0, G_OPTION_ARG_INT, &STREAMMUX_BATCH_SIZE, "Streammux batch-size (default 1)", NULL},
-  {"streammux-width", 'w', 0, G_OPTION_ARG_INT, &STREAMMUX_WIDTH, "Streammux width (default 1920)", NULL},
-  {"streammux-height", 'e', 0, G_OPTION_ARG_INT, &STREAMMUX_HEIGHT, "Streammux height (default 1080)", NULL},
-  {"gpu-id", 'g', 0, G_OPTION_ARG_INT, &GPU_ID, "GPU id (default 0)", NULL},
-  {"kafka-broker", 'k', 0, G_OPTION_ARG_STRING, &KAFKA_BROKER, "Kafka broker address (e.g., localhost:9092)", NULL},
-  {"kafka-topic", 't', 0, G_OPTION_ARG_STRING, &KAFKA_TOPIC, "Kafka topic name (default: face-detections)", NULL},
-  {"kafka-delay", 'd', 0, G_OPTION_ARG_DOUBLE, &KAFKA_SEND_DELAY_SEC, "Delay in seconds before sending to Kafka (default: 2.0)", NULL},
-  {"kafka-quality-threshold", 'q', 0, G_OPTION_ARG_DOUBLE, &KAFKA_QUALITY_IMPROVEMENT_THRESHOLD, "Minimum quality improvement to resend (default: 0.005)", NULL},
-  {"disable-crop-image", 0, G_OPTION_FLAG_REVERSE, G_OPTION_ARG_NONE, &ENABLE_CROP_IMAGE, "Disable crop image in Kafka JSON", NULL},
-  {"disable-display", 0, 0, G_OPTION_ARG_NONE, &DISABLE_DISPLAY, "Disable video display output", NULL},
-  {"use-triton", 0, 0, G_OPTION_ARG_NONE, &USE_TRITON, "Use nvinferserver (Triton) instead of nvinfer", NULL},
-  {"enable-frame-save", 0, 0, G_OPTION_ARG_NONE, &ENABLE_FRAME_SAVE, "Enable saving frames to disk", NULL},
-  {"frame-save-dir", 0, 0, G_OPTION_ARG_STRING, &FRAME_SAVE_DIR, "Directory to save frames (default: ./outputs/frames)", NULL},
-  {"frame-save-quality", 0, 0, G_OPTION_ARG_INT, &FRAME_SAVE_QUALITY, "JPEG quality 0-100 (default: 85)", NULL},
+// =============================================================================
+// Command-line option entries (map to struct fields directly)
+// =============================================================================
+
+/* Temporary holders for options that need post-processing */
+static gchar    *_opt_config_file  = NULL;
+static gchar   **_opt_sources      = NULL;
+static gchar    *_opt_infer_config = NULL;
+static gchar    *_opt_kafka_broker = NULL;
+static gchar    *_opt_kafka_topic  = NULL;
+static gchar    *_opt_frame_save_dir = NULL;
+
+static GOptionEntry entries[] = {
+  /* General */
+  {"config",        'f', 0, G_OPTION_ARG_STRING,       &_opt_config_file,
+   "INI configuration file",                             NULL},
+  {"source",        's', 0, G_OPTION_ARG_STRING_ARRAY,  &_opt_sources,
+   "Source URI (repeatable: -s uri1 -s uri2)",           "URI"},
+  {"gpu-id",        'g', 0, G_OPTION_ARG_INT,           &app_config.gpu_id,
+   "GPU id (default 0)",                                 NULL},
+
+  /* Streammux */
+  {"streammux-batch-size", 'b', 0, G_OPTION_ARG_INT, &app_config.streammux.batch_size,
+   "Streammux batch-size (default 1)",                   NULL},
+  {"streammux-width",      'w', 0, G_OPTION_ARG_INT, &app_config.streammux.width,
+   "Streammux width (default 1920)",                     NULL},
+  {"streammux-height",     'e', 0, G_OPTION_ARG_INT, &app_config.streammux.height,
+   "Streammux height (default 1080)",                    NULL},
+
+  /* Inference */
+  {"infer-config",  'c', 0, G_OPTION_ARG_STRING, &_opt_infer_config,
+   "nvinfer config file path",                           NULL},
+  {"use-triton",    0,   0, G_OPTION_ARG_NONE,   &app_config.infer.use_triton,
+   "Use nvinferserver (Triton) instead of nvinfer",      NULL},
+
+  /* Kafka */
+  {"kafka-broker",           'k', 0, G_OPTION_ARG_STRING, &_opt_kafka_broker,
+   "Kafka broker  (e.g. localhost:9092)",                NULL},
+  {"kafka-topic",            't', 0, G_OPTION_ARG_STRING, &_opt_kafka_topic,
+   "Kafka topic (default: face-detections)",             NULL},
+  {"kafka-delay",            'd', 0, G_OPTION_ARG_DOUBLE, &app_config.kafka.send_delay_sec,
+   "Delay before sending to Kafka in seconds",           NULL},
+  {"kafka-quality-threshold",'q', 0, G_OPTION_ARG_DOUBLE, &app_config.kafka.quality_improvement_threshold,
+   "Min quality delta to resend a detection",            NULL},
+
+  /* Display */
+  {"disable-display",   0, 0,                    G_OPTION_ARG_NONE, &app_config.display.disabled,
+   "Disable video display output",                       NULL},
+
+  /* Crop */
+  {"disable-crop-image", 0, G_OPTION_FLAG_REVERSE, G_OPTION_ARG_NONE, &app_config.enable_crop_image,
+   "Disable face crop image in Kafka JSON",              NULL},
+
+  /* Frame save */
+  {"enable-frame-save",  0, 0, G_OPTION_ARG_NONE,   &app_config.frame_save.enabled,
+   "Enable saving frames to disk",                       NULL},
+  {"frame-save-dir",     0, 0, G_OPTION_ARG_STRING, &_opt_frame_save_dir,
+   "Directory to save frames",                           NULL},
+  {"frame-save-quality", 0, 0, G_OPTION_ARG_INT,    &app_config.frame_save.quality,
+   "JPEG quality 0-100 (default 70)",                    NULL},
+
   {NULL}
 };
 
-gint parse_command_line(gint argc, char *argv[])
+// =============================================================================
+// parse_command_line
+// =============================================================================
+
+gint
+parse_command_line(gint argc, char *argv[])
 {
-  // ========== PASS 1: Look for config file ==========
+  /* ── Pass 1: look for -f / --config so we can load the INI first ── */
   for (gint i = 1; i < argc; i++) {
     if (g_strcmp0(argv[i], "--config") == 0 || g_strcmp0(argv[i], "-f") == 0) {
       if (i + 1 < argc) {
-        CONFIG_FILE = g_strdup(argv[i + 1]);
-        g_print("Found config file: %s\n", CONFIG_FILE);
+        _opt_config_file = g_strdup(argv[i + 1]);
+        g_print("Found config file: %s\n", _opt_config_file);
         break;
       }
     }
   }
-  
-  // ========== Load config file if specified ==========
-  if (CONFIG_FILE) {
+
+  /* ── Load INI file (sets defaults for everything) ── */
+  if (_opt_config_file) {
     g_print("Loading configuration from file...\n");
-    GError *config_error = NULL;
-    if (!parse_config_file(CONFIG_FILE, &config_error)) {
-      g_printerr("ERROR - Failed to load config file: %s\n", 
-                 config_error ? config_error->message : "unknown error");
-      if(config_error) g_error_free(config_error);
+    GError *cfg_err = NULL;
+    if (!parse_config_file(_opt_config_file, &cfg_err)) {
+      g_printerr("ERROR - Failed to load config file: %s\n",
+                 cfg_err ? cfg_err->message : "unknown error");
+      if (cfg_err) g_error_free(cfg_err);
       return -1;
     }
+    app_config.config_file = g_strdup(_opt_config_file);
     g_print("Configuration loaded successfully\n");
   }
 
-  // ========== Parse all command line options (override config) ==========
+  /* ── Parse remaining CLI flags (override INI values) ── */
   g_print("Parsing command line options...\n");
- GOptionContext *ctx = g_option_context_new("DeepStream");
-  GOptionGroup *group = g_option_group_new("deepstream", NULL, NULL, NULL, NULL);
-  GError *error = NULL;
-  g_option_group_add_entries(group, entries);
-  g_option_context_set_main_group(ctx, group);
+  GOptionContext *ctx = g_option_context_new("- DeepStream Face App");
+  GOptionGroup   *grp = g_option_group_new("deepstream", NULL, NULL, NULL, NULL);
+  GError         *err = NULL;
+
+  g_option_group_add_entries(grp, entries);
+  g_option_context_set_main_group(ctx, grp);
   g_option_context_add_group(ctx, gst_init_get_option_group());
-  if (!g_option_context_parse(ctx, &argc, &argv, &error)) {
-    g_printerr("ERROR - %s\n", error->message);
+
+  if (!g_option_context_parse(ctx, &argc, &argv, &err)) {
+    g_printerr("ERROR - %s\n", err->message);
     g_printerr("Run with --help to see available options\n");
-    g_error_free(error);
+    g_error_free(err);
     g_option_context_free(ctx);
     return -1;
   }
   g_option_context_free(ctx);
 
-  // ========== Validate parsed options ==========
-  if (SOURCES) {
-    NUM_SOURCES = g_strv_length(SOURCES);
+  /* ── Flush temp holders into struct ── */
+  if (_opt_infer_config) {
+    g_free(app_config.infer.config_file);
+    app_config.infer.config_file = _opt_infer_config;
+    _opt_infer_config = NULL;
+  }
+  if (_opt_sources) {
+    g_strfreev(app_config.source.uris);
+    app_config.source.uris  = _opt_sources;
+    app_config.source.count = g_strv_length(_opt_sources);
+    _opt_sources = NULL;
+  }
+  if (_opt_kafka_broker) {
+    g_free(app_config.kafka.broker);
+    app_config.kafka.broker = _opt_kafka_broker;
+    _opt_kafka_broker = NULL;
+  }
+  if (_opt_kafka_topic) {
+    g_free(app_config.kafka.topic);
+    app_config.kafka.topic = _opt_kafka_topic;
+    _opt_kafka_topic = NULL;
+  }
+  if (_opt_frame_save_dir) {
+    g_free(app_config.frame_save.dir);
+    app_config.frame_save.dir = _opt_frame_save_dir;
+    _opt_frame_save_dir = NULL;
   }
 
-  if (NUM_SOURCES == 0) {
+  /* ── Validation ── */
+  if (app_config.source.count == 0) {
     g_printerr("ERROR - No sources provided. Use -s <uri> to specify source(s)\n");
     return -1;
   }
 
-  if (STREAMMUX_BATCH_SIZE < NUM_SOURCES) {
-    STREAMMUX_BATCH_SIZE = NUM_SOURCES;
-    g_print("Setting batch-size to %d to match number of sources\n", STREAMMUX_BATCH_SIZE);
+  if (app_config.streammux.batch_size < app_config.source.count) {
+    app_config.streammux.batch_size = app_config.source.count;
+    g_print("Setting batch-size to %d to match number of sources\n",
+            app_config.streammux.batch_size);
   }
 
-  if (!INFER_CONFIG) {
-    g_printerr("ERROR - Config infer file not provided. Use -c <path> to specify\n");
+  if (!app_config.infer.config_file) {
+    g_printerr("ERROR - Infer config file not provided. Use -c <path>\n");
     return -1;
   }
 
-  // Check if Kafka is enabled
-  if (KAFKA_BROKER) {
-    KAFKA_ENABLED = TRUE;
-    if (!KAFKA_TOPIC) {
-      KAFKA_TOPIC = g_strdup("face-detections");
-    }
+  /* Derive kafka.enabled from broker presence */
+  if (app_config.kafka.broker) {
+    app_config.kafka.enabled = TRUE;
+    if (!app_config.kafka.topic)
+      app_config.kafka.topic = g_strdup("face-detections");
   }
+
+  /* Default tracker lib/config paths if not set via INI/CLI */
+  if (!app_config.tracker.ll_lib_file)
+    app_config.tracker.ll_lib_file = g_strdup(
+      "/opt/nvidia/deepstream/deepstream/lib/libnvds_nvmultiobjecttracker.so");
+  if (!app_config.tracker.ll_config_file)
+    app_config.tracker.ll_config_file = g_strdup(
+      "/opt/nvidia/deepstream/deepstream/samples/configs/deepstream-app/config_tracker_NvDCF_perf.yml");
 
   g_print("Command line options parsed successfully\n");
   return 1;
 }
 
-void config_free()
+// =============================================================================
+// config_free — release all heap-allocated strings inside AppConfig
+// =============================================================================
+
+void
+config_free(void)
 {
-  // Free allocated global variables
-  if (CONFIG_FILE) {
-    g_free(CONFIG_FILE);
-    CONFIG_FILE = NULL;
-  }
-  // if (SOURCE) {
-  //   g_free(SOURCE);
-  //   SOURCE = NULL;
-  // }
-  if (SOURCES) {
-    g_strfreev(SOURCES);
-    SOURCES = NULL;
-    NUM_SOURCES = 0;
-  }
-  if (INFER_CONFIG) {
-    g_free(INFER_CONFIG);
-    INFER_CONFIG = NULL;
-  }
-  if (KAFKA_BROKER) {
-    g_free(KAFKA_BROKER);
-    KAFKA_BROKER = NULL;
-  }
-  if (KAFKA_TOPIC) {
-    g_free(KAFKA_TOPIC);
-    KAFKA_TOPIC = NULL;
-  }
-  if (FRAME_SAVE_DIR) {
-    g_free(FRAME_SAVE_DIR);
-    FRAME_SAVE_DIR = NULL;
-  }
+  g_free(app_config.config_file);
+  app_config.config_file = NULL;
+
+  g_strfreev(app_config.source.uris);
+  app_config.source.uris  = NULL;
+  app_config.source.count = 0;
+
+  g_free(app_config.infer.config_file);
+  app_config.infer.config_file = NULL;
+
+  g_free(app_config.tracker.ll_lib_file);
+  app_config.tracker.ll_lib_file = NULL;
+
+  g_free(app_config.tracker.ll_config_file);
+  app_config.tracker.ll_config_file = NULL;
+
+  g_free(app_config.kafka.broker);
+  app_config.kafka.broker = NULL;
+
+  g_free(app_config.kafka.topic);
+  app_config.kafka.topic = NULL;
+
+  g_free(app_config.frame_save.dir);
+  app_config.frame_save.dir = NULL;
 }

@@ -45,6 +45,10 @@ LIBS:= `pkg-config --libs $(PKGS)`
 LIBS+= -L$(LIB_INSTALL_DIR) -lnvdsgst_meta -lnvds_meta -lnvdsgst_helper -lnvbufsurftransform -lnvbufsurface -L/usr/local/cuda-$(CUDA_VER)/lib64/ -lcudart \
        -lcuda -Wl,-rpath,$(LIB_INSTALL_DIR) $(KAFKA_LIBS) -lm -ljpeg
 
+ifeq ($(DEBUG), 1)
+	CFLAGS += -g -DDEBUG
+endif
+
 LOG_APP?=
 ifeq ($(LOG_APP),)
 	LOG_APP=deepstream
@@ -54,7 +58,7 @@ ifeq ($(LOG),)
 	LOG=4
 endif
 
-all: $(APP)
+all: clean $(APP)
 
 %.o: %.c $(INCS) Makefile
 	$(CC) -c -o $@ $(CFLAGS) $<
@@ -64,6 +68,7 @@ all: $(APP)
 
 $(APP): $(OBJS) Makefile
 	$(CXX) -o $(APP) $(OBJS) $(LIBS)
+	@echo "Build successful → $(APP) with debug=$(DEBUG) and Kafka support=$(KAFKA)"
 
 clean: clean_images
 	rm -rf $(OBJS) $(APP)
@@ -75,6 +80,10 @@ clean_images:
 
 run: clean_images $(APP)
 	GST_DEBUG=$(LOG_APP):$(LOG) ./$(APP) --config /app/configs/app.ini \
+	-s file:///app/videos/faces_tracking.mp4
+
+debug: clean_images $(APP)
+	GST_DEBUG=$(LOG_APP):$(LOG) gdb --args ./$(APP) --config /app/configs/app.ini \
 	-s file:///app/videos/faces_tracking.mp4
 
 run_triton: clean_images $(APP)
