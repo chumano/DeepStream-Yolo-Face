@@ -37,6 +37,11 @@
 - [ ] streaming with mjpeg 
 - [ ] consumer with rule engine
 
+## Video inspect (scripts/video) with OpenCV
+ - [x] Get metadata from video file and print to console
+ - [x] Convert video file to frame images and save to disk
+ - [x] Convert frame images to video file and save to disk
+
 ## Model conversion
 - [ ] add NMS to onnx model https://github.com/triple-mu/YOLOv8-TensorRT/blob/main/models/common.py#L27
 - https://github.com/triple-mu/YOLOv8-TensorRT/blob/main/docs/Pose.md
