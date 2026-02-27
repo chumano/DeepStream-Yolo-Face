@@ -23,9 +23,9 @@
 ### C++
 - [x] refactor deepstream.c to deepstream.cpp
 - [x] pipepline monitoring and metrics
+- [x] pipeline elements configuration
 - [ ] handle dynamic input sources (add/remove camera at runtime) through rest server
   - https://docs.nvidia.com/metropolis/deepstream/7.1/text/DS_plugin_gst-nvmultiurisrcbin.html
-- [ ] pipeline elements configuration
 - [ ] check region of interest (ROI) for face detection
 - [ ] improve face assessment (blur, small faces, wear mask, ...)
 
