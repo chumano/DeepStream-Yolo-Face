@@ -308,6 +308,11 @@ static GOptionEntry entries[] = {
   {NULL}
 };
 
+
+// =============================================================================
+// Forward declaration for static function
+// =============================================================================
+static void print_app_config(void);
 // =============================================================================
 // parse_command_line
 // =============================================================================
@@ -420,7 +425,94 @@ parse_command_line(gint argc, char *argv[])
       "/opt/nvidia/deepstream/deepstream/samples/configs/deepstream-app/config_tracker_NvDCF_perf.yml");
 
   g_print("Command line options parsed successfully\n");
+
+
+  /* ── print final config ── */
+  print_app_config();
   return 1;
+}
+// =============================================================================
+// print_app_config — print all fields of AppConfig for debugging
+// =============================================================================
+
+static void print_app_config(void) {
+  g_print("\n==== Final AppConfig ===="\
+   "\n  config_file: %s"\
+   "\n  gpu_id: %u"\
+   "\n  jetson: %s"\
+   "\n  perf_measurement_interval_sec: %u"\
+   "\n  wait_for_user_input: %s"\
+   "\n  enable_crop_image: %s"\
+   "\n  sources.count: %u"\
+   "\n  sources.uris: ",
+   app_config.config_file ? app_config.config_file : "(none)",
+   app_config.gpu_id,
+   app_config.jetson ? "TRUE" : "FALSE",
+   app_config.perf_measurement_interval_sec,
+   app_config.wait_for_user_input ? "TRUE" : "FALSE",
+   app_config.enable_crop_image ? "TRUE" : "FALSE",
+   app_config.source.count);
+  if (app_config.source.uris) {
+    for (guint i = 0; i < app_config.source.count; ++i)
+      g_print("%s%s", i == 0 ? "" : ", ", app_config.source.uris[i]);
+  } else {
+    g_print("(none)");
+  }
+  g_print("\n  streammux: batch_size=%u width=%u height=%u batched_push_timeout=%u",
+    app_config.streammux.batch_size,
+    app_config.streammux.width,
+    app_config.streammux.height,
+    app_config.streammux.batched_push_timeout);
+  g_print("\n  infer: config_file=%s use_triton=%s qos=%s",
+    app_config.infer.config_file ? app_config.infer.config_file : "(none)",
+    app_config.infer.use_triton ? "TRUE" : "FALSE",
+    app_config.infer.qos ? "TRUE" : "FALSE");
+  g_print("\n  tracker: width=%u height=%u ll_lib_file=%s ll_config_file=%s display_tracking_id=%s",
+    app_config.tracker.width,
+    app_config.tracker.height,
+    app_config.tracker.ll_lib_file ? app_config.tracker.ll_lib_file : "(none)",
+    app_config.tracker.ll_config_file ? app_config.tracker.ll_config_file : "(none)",
+    app_config.tracker.display_tracking_id ? "TRUE" : "FALSE");
+  g_print("\n  osd: process_mode=%d qos=%s",
+    app_config.osd.process_mode,
+    app_config.osd.qos ? "TRUE" : "FALSE");
+  g_print("\n  display: disabled=%s window_width=%u window_height=%u sync=%s async_sink=%s qos=%s",
+    app_config.display.disabled ? "TRUE" : "FALSE",
+    app_config.display.window_width,
+    app_config.display.window_height,
+    app_config.display.sync ? "TRUE" : "FALSE",
+    app_config.display.async_sink ? "TRUE" : "FALSE",
+    app_config.display.qos ? "TRUE" : "FALSE");
+  g_print("\n  queue: max_size_buffers=%u leaky=%d",
+    app_config.queue.max_size_buffers,
+    app_config.queue.leaky);
+  g_print("\n  appsink: max_buffers=%u drop=%s sync=%s",
+    app_config.appsink.max_buffers,
+    app_config.appsink.drop ? "TRUE" : "FALSE",
+    app_config.appsink.sync ? "TRUE" : "FALSE");
+  g_print("\n  kafka: enabled=%s broker=%s topic=%s send_delay_sec=%.3f quality_improvement_threshold=%.3f sent_record_ttl_sec=%.3f pending_ttl_sec=%.3f cleanup_interval_sec=%.3f",
+    app_config.kafka.enabled ? "TRUE" : "FALSE",
+    app_config.kafka.broker ? app_config.kafka.broker : "(none)",
+    app_config.kafka.topic ? app_config.kafka.topic : "(none)",
+    app_config.kafka.send_delay_sec,
+    app_config.kafka.quality_improvement_threshold,
+    app_config.kafka.sent_record_ttl_sec,
+    app_config.kafka.pending_ttl_sec,
+    app_config.kafka.cleanup_interval_sec);
+  g_print("\n  face_quality: min_landmark_confidence=%.3f min_visible_landmarks=%u face_quality_threshold=%.3f min_frontal_score=%.3f",
+    app_config.face_quality.min_landmark_confidence,
+    app_config.face_quality.min_visible_landmarks,
+    app_config.face_quality.face_quality_threshold,
+    app_config.face_quality.min_frontal_score);
+  g_print("\n  osd_text: max_display_len=%d ntp_text_x_offset=%d ntp_text_y_offset=%d ntp_text_font_size=%d",
+    app_config.osd_text.max_display_len,
+    app_config.osd_text.ntp_text_x_offset,
+    app_config.osd_text.ntp_text_y_offset,
+    app_config.osd_text.ntp_text_font_size);
+  g_print("\n  frame_save: enabled=%s dir=%s quality=%u\n==========================\n\n",
+    app_config.frame_save.enabled ? "TRUE" : "FALSE",
+    app_config.frame_save.dir ? app_config.frame_save.dir : "(none)",
+    app_config.frame_save.quality);
 }
 
 // =============================================================================

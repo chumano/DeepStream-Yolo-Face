@@ -376,6 +376,12 @@ appsink_new_sample_callback(GstElement *appsink, gpointer user_data)
   
   NvBufSurface *surface = (NvBufSurface *)map_info.data;
   
+  // get memtype of surface for debugging
+  if(surface) {
+    GST_DEBUG("Got surface from appsink: numFilled=%d, memType=%d", 
+              surface->numFilled, surface->memType);
+  }
+
   // Validate surface
   gboolean surface_valid = (surface != NULL && 
                             surface->numFilled > 0 && 
@@ -621,10 +627,9 @@ main(gint argc, char *argv[])
     return -1;
   }
   
-
   //================================================
-  GST_INFO("\n");
   // Debug: Print what was actually parsed
+  GST_INFO("\n");
   GST_INFO("DEBUG - After parsing:\n");
   GST_INFO("  NUM_SOURCES: %d", app_config.source.count);
   if (app_config.source.uris) {
@@ -635,9 +640,6 @@ main(gint argc, char *argv[])
     GST_INFO("  SOURCES: (null)");
   }
   GST_INFO("INFER_CONFIG: %s", app_config.infer.config_file);
-  GST_INFO("STREAMMUX_BATCH_SIZE: %d", app_config.streammux.batch_size);
-  GST_INFO("STREAMMUX_WIDTH: %d",      app_config.streammux.width);
-  GST_INFO("STREAMMUX_HEIGHT: %d",     app_config.streammux.height);
   GST_INFO("GPU_ID: %d",               app_config.gpu_id);
   GST_INFO("PERF_MEASUREMENT_INTERVAL_SEC: %d", app_config.perf_measurement_interval_sec);
   GST_INFO("JETSON: %s",     app_config.jetson      ? "TRUE" : "FALSE");
@@ -655,6 +657,7 @@ main(gint argc, char *argv[])
   }
   GST_INFO("\n");
 
+  // ============================================================================
   // wait user to press enter key to start
   if (app_config.wait_for_user_input) {
     g_print("Press ENTER to start processing ...\n");
@@ -873,12 +876,16 @@ main(gint argc, char *argv[])
   g_object_set(G_OBJECT(nvstreammux),
      "batch-size", app_config.streammux.batch_size,
      "batched-push-timeout", app_config.streammux.batched_push_timeout,
-     "width", app_config.streammux.width, "height", app_config.streammux.height, "live-source", 1, NULL);
+     "width", app_config.streammux.width, "height", app_config.streammux.height, 
+     "live-source", 1,
+     NULL);
   g_object_set(G_OBJECT(nvinfer), "config-file-path", app_config.infer.config_file, "qos", (gint)app_config.infer.qos, NULL);
   g_object_set(G_OBJECT(nvtracker), "tracker-width", app_config.tracker.width, "tracker-height", app_config.tracker.height,
       "ll-lib-file", app_config.tracker.ll_lib_file,
       "ll-config-file", app_config.tracker.ll_config_file,
-      "gpu-id", app_config.gpu_id, "display-tracking-id", (gint)app_config.tracker.display_tracking_id, NULL);
+      "gpu-id", app_config.gpu_id, 
+      "display-tracking-id", (gint)app_config.tracker.display_tracking_id, 
+      NULL);
 
   // if (g_strrstr(SOURCE, "file://")) {
   //   g_object_set(G_OBJECT(nvstreammux), "live-source", 0, NULL);
@@ -906,8 +913,10 @@ main(gint argc, char *argv[])
 
   //==============================================
   // Link the elements together
-  if (!gst_element_link_many(nvstreammux, nvinfer, nvtracker, nvvidconv, 
-                           capsfilter, tee, NULL)) {
+  if (!gst_element_link_many(nvstreammux, nvinfer, nvtracker, 
+                           nvvidconv, 
+                           capsfilter, 
+                           tee, NULL)) {
     g_printerr("ERROR - Failed to link pipeline elements to tee\n");
     return -1;
   }

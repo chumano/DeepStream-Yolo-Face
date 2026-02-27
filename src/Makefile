@@ -58,7 +58,7 @@ ifeq ($(LOG),)
 	LOG=4
 endif
 
-all: clean $(APP)
+all: $(APP)
 
 %.o: %.c $(INCS) Makefile
 	$(CC) -c -o $@ $(CFLAGS) $<
@@ -85,6 +85,10 @@ run: clean_images $(APP)
 debug: clean_images $(APP)
 	GST_DEBUG=$(LOG_APP):$(LOG) gdb --args ./$(APP) --config /app/configs/app.ini \
 	-s file:///app/videos/faces_tracking.mp4
+	
+debug2: clean_images $(APP)
+	GST_DEBUG=$(LOG_APP):$(LOG) gdb --args ./$(APP) --config /app/configs/app.ini \
+	-s file:///app/videos/faces_tracking.mp4 -s file:///app/videos/friends_short.mp4 --disable-display
 
 run_triton: clean_images $(APP)
 	GST_DEBUG=deepstream:$(LOG) ./$(APP) --config /app/configs/app_triton.ini
