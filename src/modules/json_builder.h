@@ -16,6 +16,54 @@ extern "C" {
  */
 gchar *build_detection_json(FaceContext *ctx);
 
+/**
+ * Build a lightweight JSON string for a generic (non-face) detected object.
+ * Suitable for traffic / secondary-inference detections that carry no
+ * landmark or face-quality data.
+ *
+ * @param source_id   source stream index
+ * @param frame_num   frame number
+ * @param timestamp   NTP timestamp in seconds
+ * @param object_id   tracking object id
+ * @param class_id    class index
+ * @param label       class label string (may be NULL)
+ * @param confidence  detection score
+ * @param left/top/width/height  bounding box in pixels
+ * @param gie_id      unique_component_id of the inference engine
+ * @return newly-allocated JSON string; caller must g_free()
+ */
+gchar *build_generic_object_json(guint        source_id,
+                                 guint        frame_num,
+                                 gdouble      timestamp,
+                                 guint64      object_id,
+                                 gint         class_id,
+                                 const gchar *label,
+                                 gdouble      confidence,
+                                 guint        left,
+                                 guint        top,
+                                 guint        width,
+                                 guint        height,
+                                 guint        gie_id);
+
+/**
+ * Build a frame-level JSON string containing all detected objects.
+ *
+ * @param source_id        source stream index
+ * @param frame_num        frame number
+ * @param timestamp        NTP timestamp in seconds
+ * @param frame_image_path saved frame JPEG path (may be NULL)
+ * @param object_jsons     NULL-terminated array of per-object JSON strings
+ *                         (each produced by build_detection_json)
+ * @param num_objects      number of entries in object_jsons
+ * @return newly-allocated JSON string; caller must g_free()
+ */
+gchar *build_frame_json(guint        source_id,
+                        guint        frame_num,
+                        gdouble      timestamp,
+                        const gchar *frame_image_path,
+                        gchar      **object_jsons,
+                        guint        num_objects);
+
 #ifdef __cplusplus
 }
 #endif

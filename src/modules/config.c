@@ -114,6 +114,12 @@ AppConfig app_config = {
     .dir     = NULL,
     .quality = 70,
   },
+
+  /* JSON save */
+  .json_save = {
+    .enabled = FALSE,
+    .dir     = NULL,
+  },
 };
 
 
@@ -244,6 +250,10 @@ parse_config_file(const gchar *config_file, GError **error)
   GET_BOOL("frame_save", "enabled", app_config.frame_save.enabled);
   GET_STR ("frame_save", "dir",     app_config.frame_save.dir);
   GET_INT ("frame_save", "quality", app_config.frame_save.quality);
+
+  /* ── [json_save] ─────────────────────────────────────────── */
+  GET_BOOL("json_save", "enabled", app_config.json_save.enabled);
+  GET_STR ("json_save", "dir",     app_config.json_save.dir);
 
 #undef GET_STR
 #undef GET_STR_ARRAY
@@ -531,10 +541,13 @@ static void print_app_config(void) {
     app_config.osd_text.ntp_text_x_offset,
     app_config.osd_text.ntp_text_y_offset,
     app_config.osd_text.ntp_text_font_size);
-  g_print("\n  frame_save: enabled=%s dir=%s quality=%u\n==========================\n\n",
+  g_print("\n  frame_save: enabled=%s dir=%s quality=%u",
     app_config.frame_save.enabled ? "TRUE" : "FALSE",
     app_config.frame_save.dir ? app_config.frame_save.dir : "(none)",
     app_config.frame_save.quality);
+  g_print("\n  json_save: enabled=%s dir=%s\n==========================\n\n",
+    app_config.json_save.enabled ? "TRUE" : "FALSE",
+    app_config.json_save.dir ? app_config.json_save.dir : "(none)");
 }
 
 // =============================================================================
@@ -571,4 +584,7 @@ config_free(void)
 
   g_free(app_config.frame_save.dir);
   app_config.frame_save.dir = NULL;
+
+  g_free(app_config.json_save.dir);
+  app_config.json_save.dir = NULL;
 }

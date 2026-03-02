@@ -65,3 +65,70 @@ build_detection_json(FaceContext *ctx)
 
   return g_string_free(json, FALSE);
 }
+
+gchar *
+build_generic_object_json(guint        source_id,
+                          guint        frame_num,
+                          gdouble      timestamp,
+                          guint64      object_id,
+                          gint         class_id,
+                          const gchar *label,
+                          gdouble      confidence,
+                          guint        left,
+                          guint        top,
+                          guint        width,
+                          guint        height,
+                          guint        gie_id)
+{
+  GString *json = g_string_new("{");
+
+  g_string_append_printf(json, "\"timestamp\":%.3f,", timestamp);
+  g_string_append_printf(json, "\"source_id\":%u,", source_id);
+  g_string_append_printf(json, "\"frame_number\":%u,", frame_num);
+  g_string_append_printf(json, "\"gie_id\":%u,", gie_id);
+  g_string_append_printf(json, "\"object_id\":%lu,", object_id);
+  g_string_append_printf(json, "\"class_id\":%d,", class_id);
+  if (label && label[0])
+    g_string_append_printf(json, "\"label\":\"%s\",", label);
+  else
+    g_string_append_printf(json, "\"label\":null,");
+  g_string_append_printf(json, "\"confidence\":%.4f,", confidence);
+  g_string_append_printf(json, "\"bbox\":{\"left\":%u,\"top\":%u,\"width\":%u,\"height\":%u}",
+                         left, top, width, height);
+
+  g_string_append_c(json, '}');
+  return g_string_free(json, FALSE);
+}
+
+gchar *
+build_frame_json(guint        source_id,
+                 guint        frame_num,
+                 gdouble      timestamp,
+                 const gchar *frame_image_path,
+                 gchar      **object_jsons,
+                 guint        num_objects)
+{
+  GString *json = g_string_new("{");
+
+  g_string_append_printf(json, "\"source_id\":%u,", source_id);
+  g_string_append_printf(json, "\"frame_num\":%u,", frame_num);
+  g_string_append_printf(json, "\"timestamp\":%.3f,", timestamp);
+  g_string_append_printf(json, "\"num_objects\":%u,", num_objects);
+
+  if (frame_image_path)
+    g_string_append_printf(json, "\"frame_image_path\":\"%s\",", frame_image_path);
+  else
+    g_string_append(json, "\"frame_image_path\":null,");
+
+  g_string_append(json, "\"objects\":[");
+  for (guint i = 0; i < num_objects; i++) {
+    if (object_jsons[i]) {
+      g_string_append(json, object_jsons[i]);
+      if (i < num_objects - 1)
+        g_string_append_c(json, ',');
+    }
+  }
+  g_string_append(json, "]}");
+
+  return g_string_free(json, FALSE);
+}

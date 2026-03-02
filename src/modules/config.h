@@ -104,6 +104,12 @@ typedef struct {
   guint    quality;  /**< JPEG quality 0–100 */
 } AppFrameSaveConfig;
 
+/** Per-frame JSON output */
+typedef struct {
+  gboolean enabled;   /**< TRUE → write one JSON file per inferred frame */
+  gchar   *dir;       /**< output directory, e.g. /app/outputs/json */
+} AppJsonSaveConfig;
+
 // =============================================================================
 // Top-level application configuration
 // =============================================================================
@@ -132,6 +138,7 @@ typedef struct {
   AppFaceQualityConfig face_quality;
   AppOsdTextConfig     osd_text;
   AppFrameSaveConfig   frame_save;
+  AppJsonSaveConfig    json_save;
 } AppConfig;
 
 /** Single global instance — defined in config.c */

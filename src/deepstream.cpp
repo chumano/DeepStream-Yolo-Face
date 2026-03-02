@@ -1,5 +1,6 @@
 #include "deepstream.h"
 #include <jpeglib.h>
+#include <sys/stat.h>
 
 //  modules
 #include "modules/config.h"
@@ -27,8 +28,14 @@ get_current_time(void)
 // Face Processing Pipeline
 // =============================================================================
 
-static void
-process_object(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta, NvBufSurface *surface, 
+/**
+ * Process a single detected object/face.
+ * Returns a newly-allocated JSON string describing the detection, or NULL if
+ * the object was filtered out or JSON building is not required.
+ * The caller is responsible for g_free()-ing the returned string.
+ */
+static gchar *
+process_object(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta, NvBufSurface *surface,
     gchar* frame_image_path)
 {
   gdouble frame_timestamp = 0.0;
@@ -54,7 +61,7 @@ process_object(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta, NvBufSurface
     GST_DEBUG("Insufficient landmarks (%u) for object_id=%lu", 
               num_landmarks, obj_meta->object_id);
     g_free(landmarks);
-    return;
+    return NULL;
   }
 
   // Assess face quality
@@ -65,7 +72,7 @@ process_object(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta, NvBufSurface
   if (!assess_face_quality(landmarks, num_landmarks, 
                            &is_good_face, &quality_score, &metrics)) {
     GST_DEBUG("Failed to assess face quality for object_id=%lu", obj_meta->object_id);
-    return;
+    return NULL;
   }
 
   GST_DEBUG("Face quality for object_id=%lu: is_good=%s, score=%.3f",
@@ -109,20 +116,63 @@ process_object(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta, NvBufSurface
                                       ctx.is_good_face, ctx.quality_score);
   }
 
+  // Build detection JSON (used for Kafka and/or JSON file output)
+  gchar *json_data = NULL;
+  bool need_json = (app_config.json_save.enabled) ||
+                   (app_config.kafka.enabled && detection_manager &&
+                    detection_manager_is_enabled(detection_manager));
+  if (need_json) {
+    json_data = build_detection_json(&ctx);
+  }
+
   // Process face detection and send to Kafka
   if (app_config.kafka.enabled && detection_manager && detection_manager_is_enabled(detection_manager)) {
-      // Build JSON payload
-      gchar *json_data = build_detection_json(&ctx);
-
-      // Queue detection for Kafka
-      detection_manager_queue(detection_manager,ctx.source_id,  ctx.object_id,
-                              ctx.quality_score, json_data);         
-      g_free(json_data);
+      detection_manager_queue(detection_manager, ctx.source_id, ctx.object_id,
+                              ctx.quality_score, json_data);
   }
 
   // Cleanup
   g_free(face_image_base64);
   g_free(landmarks);
+
+  // Return JSON string to caller (caller must g_free; may be NULL)
+  return json_data;
+}
+
+/**
+ * Process a single object from the secondary (traffic) inference engine.
+ * Returns a newly-allocated JSON string, or NULL on error.
+ * The caller is responsible for g_free()-ing the returned string.
+ */
+static gchar *
+process_traffic_object(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta,
+                       const gchar *frame_image_path)
+{
+  gdouble frame_timestamp = 0.0;
+  if (frame_meta && frame_meta->ntp_timestamp) {
+    frame_timestamp = (gdouble)frame_meta->ntp_timestamp / 1e9;
+  } else {
+    frame_timestamp = get_current_time();
+  }
+
+  if (pipeline_monitor) {
+    pipeline_monitor_record_detection(pipeline_monitor, frame_meta->source_id,
+                                      FALSE, (gdouble)obj_meta->confidence);
+  }
+
+  return build_generic_object_json(
+      frame_meta->source_id,
+      (guint)frame_meta->frame_num,
+      frame_timestamp,
+      obj_meta->object_id,
+      obj_meta->class_id,
+      obj_meta->obj_label,
+      (gdouble)obj_meta->confidence,
+      (guint)obj_meta->rect_params.left,
+      (guint)obj_meta->rect_params.top,
+      (guint)obj_meta->rect_params.width,
+      (guint)obj_meta->rect_params.height,
+      obj_meta->unique_component_id);
 }
 
 static void
@@ -337,6 +387,47 @@ bus_call(GstBus *bus, GstMessage *message, gpointer user_data)
 }
 
 
+// =============================================================================
+// JSON File Save Helper
+// =============================================================================
+
+/**
+ * Write a frame-level JSON file to disk.
+ * File path: {json_save.dir}/source_{source_id}/frame_{frame_num:06d}.json
+ */
+static void
+save_frame_to_json(guint source_id, guint frame_num, gdouble timestamp,
+                   const gchar *frame_image_path,
+                   gchar **object_jsons, guint num_objects)
+{
+  if (!app_config.json_save.enabled || !app_config.json_save.dir)
+    return;
+
+  // Ensure per-source subdirectory exists
+  gchar *src_dir = g_strdup_printf("%s/source_%u",
+                                    app_config.json_save.dir, source_id);
+  g_mkdir_with_parents(src_dir, 0755);
+
+  gchar *file_path = g_strdup_printf("%s/frame_%06u.json", src_dir, frame_num);
+  g_free(src_dir);
+
+  gchar *json = build_frame_json(source_id, frame_num, timestamp,
+                                  frame_image_path, object_jsons, num_objects);
+  if (json) {
+    GError *err = NULL;
+    g_file_set_contents(file_path, json, -1, &err);
+    if (err) {
+      GST_WARNING("Failed to write frame JSON to %s: %s", file_path, err->message);
+      g_error_free(err);
+    } else {
+      GST_DEBUG("Saved frame JSON: %s", file_path);
+    }
+    g_free(json);
+  }
+  g_free(file_path);
+}
+
+
 static GstFlowReturn
 appsink_new_sample_callback(GstElement *appsink, gpointer user_data)
 {
@@ -447,14 +538,25 @@ appsink_new_sample_callback(GstElement *appsink, gpointer user_data)
     }
     
     // Process each object in frame
+    GPtrArray *obj_jsons = g_ptr_array_new_with_free_func(g_free);
     NvDsMetaList *l_obj = NULL;
     for (l_obj = frame_meta->obj_meta_list; l_obj != NULL; l_obj = l_obj->next) {
       NvDsObjectMeta *obj_meta = (NvDsObjectMeta *)(l_obj->data);
-      
-      // Process face with surface parameter
-      process_object(frame_meta, obj_meta, surface, image_rel_path);
 
-      // Free mask_params sau khi đã xử lý xong
+      gchar *obj_json = NULL;
+
+      if (obj_meta->unique_component_id == 2) {
+        // Secondary inference (traffic / infer2) — no landmarks, generic JSON
+        obj_json = process_traffic_object(frame_meta, obj_meta, image_rel_path);
+      } else {
+        // Primary inference (face / infer) — full face pipeline
+        obj_json = process_object(frame_meta, obj_meta, surface, image_rel_path);
+      }
+
+      if (obj_json)
+        g_ptr_array_add(obj_jsons, obj_json);
+
+      // Free mask_params after processing
       if (obj_meta->mask_params.data) {
         g_free(obj_meta->mask_params.data);
         obj_meta->mask_params.data = NULL;
@@ -463,6 +565,21 @@ appsink_new_sample_callback(GstElement *appsink, gpointer user_data)
         obj_meta->mask_params.size = 0;
       }
     }
+
+    // Write per-frame JSON to disk if enabled (only when objects were detected)
+    if (app_config.json_save.enabled && app_config.json_save.dir && obj_jsons->len > 0) {
+      gdouble frame_ts = frame_meta->ntp_timestamp
+                         ? (gdouble)frame_meta->ntp_timestamp / 1e9
+                         : get_current_time();
+      save_frame_to_json(frame_meta->source_id,
+                         (guint)frame_meta->frame_num,
+                         frame_ts,
+                         image_rel_path,
+                         (gchar **)obj_jsons->pdata,
+                         obj_jsons->len);
+    }
+
+    g_ptr_array_free(obj_jsons, TRUE);
 
     if(image_rel_path) {
       g_free(image_rel_path);
