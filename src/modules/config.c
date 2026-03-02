@@ -35,6 +35,13 @@ AppConfig app_config = {
     .qos         = FALSE,
   },
 
+  /* secondary nvinferserver (Triton); disabled when config_file == NULL */
+  .infer2 = {
+    .config_file = NULL,
+    .use_triton  = TRUE,   /* always Triton */
+    .qos         = FALSE,
+  },
+
   /* nvtracker */
   .tracker = {
     .width               = 640,
@@ -180,6 +187,10 @@ parse_config_file(const gchar *config_file, GError **error)
   GET_BOOL("infer", "use-triton",  app_config.infer.use_triton);
   GET_BOOL("infer", "qos",         app_config.infer.qos);
 
+  /* ── [infer2] — secondary Triton inference ───────────────── */
+  GET_STR ("infer2", "config-file", app_config.infer2.config_file);
+  GET_BOOL("infer2", "qos",         app_config.infer2.qos);
+
   /* ── [tracker] ───────────────────────────────────────────── */
   GET_INT ("tracker", "width",                app_config.tracker.width);
   GET_INT ("tracker", "height",               app_config.tracker.height);
@@ -249,10 +260,11 @@ parse_config_file(const gchar *config_file, GError **error)
 // =============================================================================
 
 /* Temporary holders for options that need post-processing */
-static gchar    *_opt_config_file  = NULL;
-static gchar   **_opt_sources      = NULL;
-static gchar    *_opt_infer_config = NULL;
-static gchar    *_opt_kafka_broker = NULL;
+static gchar    *_opt_config_file   = NULL;
+static gchar   **_opt_sources       = NULL;
+static gchar    *_opt_infer_config  = NULL;
+static gchar    *_opt_infer2_config = NULL;
+static gchar    *_opt_kafka_broker  = NULL;
 static gchar    *_opt_kafka_topic  = NULL;
 static gchar    *_opt_frame_save_dir = NULL;
 
@@ -274,10 +286,12 @@ static GOptionEntry entries[] = {
    "Streammux height (default 1080)",                    NULL},
 
   /* Inference */
-  {"infer-config",  'c', 0, G_OPTION_ARG_STRING, &_opt_infer_config,
-   "nvinfer config file path",                           NULL},
-  {"use-triton",    0,   0, G_OPTION_ARG_NONE,   &app_config.infer.use_triton,
-   "Use nvinferserver (Triton) instead of nvinfer",      NULL},
+  {"infer-config",   'c', 0, G_OPTION_ARG_STRING, &_opt_infer_config,
+   "nvinfer config file path",                              NULL},
+  {"use-triton",     0,   0, G_OPTION_ARG_NONE,   &app_config.infer.use_triton,
+   "Use nvinferserver (Triton) instead of nvinfer",         NULL},
+  {"infer2-config",  0,   0, G_OPTION_ARG_STRING, &_opt_infer2_config,
+   "Secondary nvinferserver (Triton) config file path",    NULL},
 
   /* Kafka */
   {"kafka-broker",           'k', 0, G_OPTION_ARG_STRING, &_opt_kafka_broker,
@@ -369,6 +383,11 @@ parse_command_line(gint argc, char *argv[])
     g_free(app_config.infer.config_file);
     app_config.infer.config_file = _opt_infer_config;
     _opt_infer_config = NULL;
+  }
+  if (_opt_infer2_config) {
+    g_free(app_config.infer2.config_file);
+    app_config.infer2.config_file = _opt_infer2_config;
+    _opt_infer2_config = NULL;
   }
   if (_opt_sources) {
     g_strfreev(app_config.source.uris);
@@ -467,6 +486,9 @@ static void print_app_config(void) {
     app_config.infer.config_file ? app_config.infer.config_file : "(none)",
     app_config.infer.use_triton ? "TRUE" : "FALSE",
     app_config.infer.qos ? "TRUE" : "FALSE");
+  g_print("\n  infer2 (triton): config_file=%s qos=%s",
+    app_config.infer2.config_file ? app_config.infer2.config_file : "(disabled)",
+    app_config.infer2.qos ? "TRUE" : "FALSE");
   g_print("\n  tracker: width=%u height=%u ll_lib_file=%s ll_config_file=%s display_tracking_id=%s",
     app_config.tracker.width,
     app_config.tracker.height,
@@ -531,6 +553,9 @@ config_free(void)
 
   g_free(app_config.infer.config_file);
   app_config.infer.config_file = NULL;
+
+  g_free(app_config.infer2.config_file);
+  app_config.infer2.config_file = NULL;
 
   g_free(app_config.tracker.ll_lib_file);
   app_config.tracker.ll_lib_file = NULL;

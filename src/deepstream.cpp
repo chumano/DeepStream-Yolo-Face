@@ -750,6 +750,16 @@ main(gint argc, char *argv[])
     return -1;
   }
 
+  // Secondary nvinferserver (Triton) — enabled only when infer2.config_file is set
+  GstElement *nvinfer2 = NULL;
+  if (app_config.infer2.config_file) {
+    nvinfer2 = gst_element_factory_make("nvinferserver", "nvinferserver2");
+    if (!nvinfer2 || !gst_bin_add(GST_BIN(pipeline), nvinfer2)) {
+      g_printerr("ERROR - Failed to create nvinferserver2\n");
+      return -1;
+    }
+  }
+
   GstElement *nvtracker = gst_element_factory_make("nvtracker", "nvtracker");
   if (!nvtracker || !gst_bin_add(GST_BIN(pipeline), nvtracker)) {
     g_printerr("ERROR - Failed to create nvtracker\n");
@@ -880,6 +890,9 @@ main(gint argc, char *argv[])
      "live-source", 1,
      NULL);
   g_object_set(G_OBJECT(nvinfer), "config-file-path", app_config.infer.config_file, "qos", (gint)app_config.infer.qos, NULL);
+  if (nvinfer2) {
+    g_object_set(G_OBJECT(nvinfer2), "config-file-path", app_config.infer2.config_file, "qos", (gint)app_config.infer2.qos, NULL);
+  }
   g_object_set(G_OBJECT(nvtracker), "tracker-width", app_config.tracker.width, "tracker-height", app_config.tracker.height,
       "ll-lib-file", app_config.tracker.ll_lib_file,
       "ll-config-file", app_config.tracker.ll_config_file,
@@ -913,12 +926,19 @@ main(gint argc, char *argv[])
 
   //==============================================
   // Link the elements together
-  if (!gst_element_link_many(nvstreammux, nvinfer, nvtracker, 
-                           nvvidconv, 
-                           capsfilter, 
-                           tee, NULL)) {
-    g_printerr("ERROR - Failed to link pipeline elements to tee\n");
-    return -1;
+  // Pipeline: nvstreammux -> nvinfer -> [nvinfer2 (Triton)] -> nvtracker -> nvvidconv -> capsfilter -> tee
+  if (nvinfer2) {
+    if (!gst_element_link_many(nvstreammux,nvinfer, nvinfer2, nvtracker,
+                               nvvidconv, capsfilter, tee, NULL)) {
+      g_printerr("ERROR - Failed to link pipeline elements (with nvinfer2) to tee\n");
+      return -1;
+    }
+  } else {
+    if (!gst_element_link_many(nvstreammux, nvinfer, nvtracker,
+                               nvvidconv, capsfilter, tee, NULL)) {
+      g_printerr("ERROR - Failed to link pipeline elements to tee\n");
+      return -1;
+    }
   }
 
   // Link: tee -> queue_app -> appsink

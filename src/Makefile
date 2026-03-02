@@ -82,6 +82,10 @@ run: clean_images $(APP)
 	GST_DEBUG=$(LOG_APP):$(LOG) ./$(APP) --config /app/configs/app.ini \
 	-s file:///app/videos/faces_tracking.mp4
 
+run_2infer: clean_images $(APP)
+	GST_DEBUG=$(LOG_APP):$(LOG) ./$(APP) --config /app/configs/app2.ini \
+	-s file:///app/videos/myface.mp4
+
 run_my: clean_images $(APP)
 	GST_DEBUG=$(LOG_APP):$(LOG) ./$(APP) --config /app/configs/app.ini \
 	-s file:///app/videos/myface.mp4

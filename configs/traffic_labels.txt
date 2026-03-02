@@ -1,0 +1,9 @@
+motorbike
+bus
+car
+truck
+nguoidibo
+vehicle_others
+container_truck
+fire
+smoke

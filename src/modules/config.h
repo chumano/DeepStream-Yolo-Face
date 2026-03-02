@@ -121,7 +121,8 @@ typedef struct {
   /* Per-domain structs */
   AppSourceConfig      source;
   AppStreamMuxConfig   streammux;
-  AppInferConfig       infer;
+  AppInferConfig       infer;   /**< primary detector (nvinfer or nvinferserver) */
+  AppInferConfig       infer2;  /**< secondary Triton detector; disabled when config_file == NULL */
   AppTrackerConfig     tracker;
   AppOsdConfig         osd;
   AppDisplayConfig     display;

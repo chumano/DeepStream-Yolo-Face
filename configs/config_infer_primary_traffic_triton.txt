@@ -1,0 +1,50 @@
+infer_config {
+  unique_id: 2
+  gpu_ids: [0]
+  max_batch_size: 1
+  backend {
+    triton {
+      model_name: "traffic"
+      version: -1
+      grpc {
+        url: "triton:8001"
+      }
+    }
+  }
+
+  preprocess {
+    network_format: IMAGE_FORMAT_RGB
+    tensor_order: TENSOR_ORDER_LINEAR
+    maintain_aspect_ratio: 0
+    normalize {
+      scale_factor: 0.003921568627
+    }
+  }
+
+  postprocess {
+    labelfile_path: "/app/configs/traffic_labels.txt"
+    detection {
+      num_detected_classes: 9
+      custom_parse_bbox_func: "NvDsInferParseCustomEfficientNMSTLT"
+      per_class_params {
+        key: 0
+        value { pre_threshold: 0.25 }
+      }
+    }
+  }
+
+  
+  custom_lib {
+    path: "/app/DeepStream-Yolo-Face/traffic_custom/libnvds_infercustomparser_1.so"
+  }
+
+
+  extra {
+    copy_input_to_host_buffers: false
+  }
+}
+
+input_control {
+  operate_on_gie_id: -1
+  interval: 3
+}
