@@ -21,7 +21,7 @@ gboolean assess_face_quality(Landmark *landmarks, guint num_landmarks,
 /**
  * Extract landmarks from object metadata
  */
-Landmark *extract_landmarks_from_object(NvDsObjectMeta *obj_meta, guint *num_landmarks_out);
+Landmark *extract_landmarks_from_object(NvDsObjectMeta *obj_meta, guint *num_landmarks_out, guint frame_width, guint frame_height);
 
 #ifdef __cplusplus
 }

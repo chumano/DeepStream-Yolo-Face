@@ -85,7 +85,7 @@ assess_face_quality(Landmark *landmarks, guint num_landmarks,
 }
 
 Landmark *
-extract_landmarks_from_object(NvDsObjectMeta *obj_meta, guint *num_landmarks_out)
+extract_landmarks_from_object(NvDsObjectMeta *obj_meta, guint *num_landmarks_out, guint frame_width, guint frame_height)
 {
   if (obj_meta->mask_params.size == 0) {
     *num_landmarks_out = 0;
@@ -105,11 +105,15 @@ extract_landmarks_from_object(NvDsObjectMeta *obj_meta, guint *num_landmarks_out
     GST_DEBUG("Landmark data size is zero");
     return NULL;
   }
+  
+  gfloat gain = MIN((gfloat)obj_meta->mask_params.width / frame_width,
+                    (gfloat)obj_meta->mask_params.height / frame_height);
+  gfloat pad_x = (obj_meta->mask_params.width - frame_width * gain) * 0.5f;
+  gfloat pad_y = (obj_meta->mask_params.height - frame_height * gain) * 0.5f;
 
-  gfloat gain = MIN((gfloat)obj_meta->mask_params.width / app_config.streammux.width,
-                    (gfloat)obj_meta->mask_params.height / app_config.streammux.height);
-  gfloat pad_x = (obj_meta->mask_params.width - app_config.streammux.width * gain) * 0.5f;
-  gfloat pad_y = (obj_meta->mask_params.height - app_config.streammux.height * gain) * 0.5f;
+  // print debug info about landmarks
+  GST_DEBUG("Extracting %u landmarks for object_id=%lu (gain=%.3f, pad_x=%.1f, pad_y=%.1f)\n",
+        num_joints, obj_meta->object_id, gain, pad_x, pad_y);
 
   Landmark *landmarks = g_malloc(sizeof(Landmark) * num_joints);
 

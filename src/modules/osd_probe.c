@@ -11,7 +11,7 @@ GST_DEBUG_CATEGORY_EXTERN(deepstream_debug_category);
 // =============================================================================
 
 static void
-set_custom_bbox(NvDsObjectMeta *obj_meta)
+set_custom_bbox(NvDsObjectMeta *obj_meta, guint frame_width, uint frame_height)
 {
   guint border_width = 1;
   guint font_size = 12;
@@ -30,8 +30,8 @@ set_custom_bbox(NvDsObjectMeta *obj_meta)
 
   obj_meta->text_params.font_params.font_name = (gchar *) "Ubuntu";
   obj_meta->text_params.font_params.font_size = font_size;
-  obj_meta->text_params.x_offset = (guint) MIN(app_config.streammux.width - 1, MAX(0, x_offset));
-  obj_meta->text_params.y_offset = (guint) MIN(app_config.streammux.height - 1, MAX(0, y_offset));
+  obj_meta->text_params.x_offset = (guint) MIN(frame_width - 1, MAX(0, x_offset));
+  obj_meta->text_params.y_offset = (guint) MIN(frame_height - 1, MAX(0, y_offset));
   obj_meta->text_params.font_params.font_color.red = 1.0;
   obj_meta->text_params.font_params.font_color.green = 1.0;
   obj_meta->text_params.font_params.font_color.blue = 1.0;
@@ -52,7 +52,8 @@ set_custom_bbox(NvDsObjectMeta *obj_meta)
  */
 static void
 draw_landmark_circles(NvDsBatchMeta *batch_meta, NvDsFrameMeta *frame_meta,
-                      NvDsObjectMeta *obj_meta, NvDsDisplayMeta **lm_display_meta)
+                      NvDsObjectMeta *obj_meta, NvDsDisplayMeta **lm_display_meta, 
+                      guint frame_width, uint frame_height)
 {
   if (app_config.display.disabled)
     return;
@@ -60,10 +61,10 @@ draw_landmark_circles(NvDsBatchMeta *batch_meta, NvDsFrameMeta *frame_meta,
     return;
 
   guint num_joints = obj_meta->mask_params.size / (sizeof(float) * 3);
-  gfloat gain = MIN((gfloat)obj_meta->mask_params.width / app_config.streammux.width,
-                    (gfloat)obj_meta->mask_params.height / app_config.streammux.height);
-  gfloat pad_x = (obj_meta->mask_params.width  - app_config.streammux.width  * gain) * 0.5f;
-  gfloat pad_y = (obj_meta->mask_params.height - app_config.streammux.height * gain) * 0.5f;
+  gfloat gain = MIN((gfloat)obj_meta->mask_params.width / frame_width,
+                    (gfloat)obj_meta->mask_params.height / frame_height);
+  gfloat pad_x = (obj_meta->mask_params.width  - frame_width  * gain) * 0.5f;
+  gfloat pad_y = (obj_meta->mask_params.height - frame_height * gain) * 0.5f;
 
   for (guint i = 0; i < num_joints; ++i) {
     gfloat xc         = (obj_meta->mask_params.data[i * 3 + 0] - pad_x) / gain;
@@ -79,8 +80,8 @@ draw_landmark_circles(NvDsBatchMeta *batch_meta, NvDsFrameMeta *frame_meta,
     }
 
     NvOSD_CircleParams *cp = &(*lm_display_meta)->circle_params[(*lm_display_meta)->num_circles];
-    cp->xc = (guint)MIN(app_config.streammux.width  - 1, MAX(0, xc));
-    cp->yc = (guint)MIN(app_config.streammux.height - 1, MAX(0, yc));
+    cp->xc = (guint)MIN(frame_width  - 1, MAX(0, xc));
+    cp->yc = (guint)MIN(frame_height - 1, MAX(0, yc));
     cp->radius = 6;
     cp->circle_color.red   = 1.0f;
     cp->circle_color.green = 1.0f;
@@ -192,14 +193,15 @@ nvosd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_da
   NvDsMetaList *l_frame = NULL;
   for (l_frame = batch_meta->frame_meta_list; l_frame != NULL; l_frame = l_frame->next) {
     NvDsFrameMeta *frame_meta = (NvDsFrameMeta *) (l_frame->data);
-
+    int mux_w = surface->surfaceList[frame_meta->batch_id].width; // = streammux width
+    int mux_h = surface->surfaceList[frame_meta->batch_id].height;  // = streammux height
     GST_DEBUG ("stream %d==%d, source [%d X %d], streammux size [%d X %d]\n",
             frame_meta->source_id,
             frame_meta->pad_index,
             frame_meta->source_frame_width,
             frame_meta->source_frame_height,
-            app_config.streammux.width, // = streammux width
-            app_config.streammux.height // = streammux height
+            mux_w, 
+            mux_h
           );
     // Add NTP timestamp overlay (once per frame)
     add_ntp_timestamp_overlay(batch_meta, frame_meta);
@@ -215,11 +217,11 @@ nvosd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_da
       NvDsObjectMeta *obj_meta = (NvDsObjectMeta *) (l_obj->data);
 
       if (app_config.osd.draw_custom_bbox)
-        set_custom_bbox(obj_meta);
+        set_custom_bbox(obj_meta, mux_w, mux_h);
 
       // Draw landmarks (circles) for display
       if (app_config.osd.draw_landmarks)
-        draw_landmark_circles(batch_meta, frame_meta, obj_meta, &display_meta);
+        draw_landmark_circles(batch_meta, frame_meta, obj_meta, &display_meta, mux_w, mux_h);
 
       // Free mask_params after processing
       // if (obj_meta->mask_params.data) {

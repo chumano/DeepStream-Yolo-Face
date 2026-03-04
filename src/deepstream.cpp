@@ -49,6 +49,9 @@ process_object(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta, NvBufSurface
     frame_timestamp = get_current_time();
   }
 
+  guint frame_width = surface->surfaceList[frame_meta->batch_id].width; // = streammux width
+  guint frame_height = surface->surfaceList[frame_meta->batch_id].height; // = streammux height
+
   // Bbox
   CropBox bbox = {
     .left = (guint) obj_meta->rect_params.left,
@@ -59,7 +62,7 @@ process_object(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta, NvBufSurface
 
   // Extract landmarks from object metadata
   guint num_landmarks = 0;
-  Landmark *landmarks = extract_landmarks_from_object(obj_meta, &num_landmarks);
+  Landmark *landmarks = extract_landmarks_from_object(obj_meta, &num_landmarks, frame_width, frame_height);
   if (!landmarks || num_landmarks < 5) {
     GST_DEBUG("Insufficient landmarks (%u) for object_id=%lu", 
               num_landmarks, obj_meta->object_id);
@@ -81,9 +84,10 @@ process_object(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta, NvBufSurface
   GST_DEBUG("Face quality for object_id=%lu: is_good=%s, score=%.3f",
             obj_meta->object_id, is_good_face ? "true" : "false", quality_score);
 
+
   // Encode cropped face image if enabled
   CropBox crop_box;
-  calculate_crop_box(obj_meta, &crop_box, app_config.streammux.width, app_config.streammux.height);
+  calculate_crop_box(obj_meta, &crop_box, frame_width, frame_height);
   gchar *face_image_base64 = NULL;
   if (app_config.enable_crop_image && surface) {
     face_image_base64 = encode_crop_to_base64_jpeg(surface, &crop_box, 85, frame_meta->batch_id);
@@ -97,8 +101,8 @@ process_object(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta, NvBufSurface
     .object_id = obj_meta->object_id,
     .class_id = obj_meta->class_id,
     .confidence = obj_meta->confidence,
-    .frame_width = app_config.streammux.width,
-    .frame_height = app_config.streammux.height,
+    .frame_width = frame_width,
+    .frame_height = frame_height,
 
     //
     .landmarks = landmarks,
@@ -487,7 +491,7 @@ main(gint argc, char *argv[])
   if (prop.integrated) {
     app_config.jetson = TRUE;
   }
-  
+
   //================================================
   // Debug: Print what was actually parsed
   log_parsed_config();
