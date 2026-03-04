@@ -184,14 +184,15 @@ set_custom_bbox(NvDsObjectMeta *obj_meta)
   gfloat x_offset = obj_meta->rect_params.left - border_width * 0.5f;
   gfloat y_offset = obj_meta->rect_params.top - font_size * 2 + border_width * 0.5f + 1;
 
-  // Set display text to show object ID
-  g_snprintf(obj_meta->text_params.display_text, app_config.osd_text.max_display_len, "ID: %lu", obj_meta->object_id);
+  // Set display text to show object ID and confidence
+  g_snprintf(obj_meta->text_params.display_text, app_config.osd_text.max_display_len, "ID: %lu  %.2f", obj_meta->object_id, obj_meta->confidence);
 
   obj_meta->rect_params.border_width = border_width;
   obj_meta->rect_params.border_color.red = 0.0;
   obj_meta->rect_params.border_color.green = 0.0;
   obj_meta->rect_params.border_color.blue = 1.0;
   obj_meta->rect_params.border_color.alpha = 1.0;
+
   obj_meta->text_params.font_params.font_name = (gchar *) "Ubuntu";
   obj_meta->text_params.font_params.font_size = font_size;
   obj_meta->text_params.x_offset = (guint) MIN(app_config.streammux.width - 1, MAX(0, x_offset));
@@ -207,9 +208,66 @@ set_custom_bbox(NvDsObjectMeta *obj_meta)
   obj_meta->text_params.text_bg_clr.alpha = 1.0;
 }
 
+
+/**
+ * Draw face landmark circles onto a display meta for the given object.
+ * Landmarks are read from obj_meta->mask_params (packed as [x, y, conf] floats).
+ * The display meta pool is acquired from batch_meta as needed.
+ * *lm_display_meta is an in/out parameter: the caller passes its current
+ * display-meta pointer (may be NULL) and receives the (possibly updated) one.
+ */
+static void
+draw_landmark_circles(NvDsBatchMeta *batch_meta, NvDsFrameMeta *frame_meta,
+                      NvDsObjectMeta *obj_meta, NvDsDisplayMeta **lm_display_meta)
+{
+  if (app_config.display.disabled)
+    return;
+  if (!obj_meta->mask_params.data || obj_meta->mask_params.size == 0)
+    return;
+
+  guint num_joints = obj_meta->mask_params.size / (sizeof(float) * 3);
+  gfloat gain = MIN((gfloat)obj_meta->mask_params.width / app_config.streammux.width,
+                    (gfloat)obj_meta->mask_params.height / app_config.streammux.height);
+  gfloat pad_x = (obj_meta->mask_params.width  - app_config.streammux.width  * gain) * 0.5f;
+  gfloat pad_y = (obj_meta->mask_params.height - app_config.streammux.height * gain) * 0.5f;
+
+  for (guint i = 0; i < num_joints; ++i) {
+    gfloat xc         = (obj_meta->mask_params.data[i * 3 + 0] - pad_x) / gain;
+    gfloat yc         = (obj_meta->mask_params.data[i * 3 + 1] - pad_y) / gain;
+    gfloat confidence =  obj_meta->mask_params.data[i * 3 + 2];
+
+    if (confidence < 0.5f)
+      continue;
+
+    if (!*lm_display_meta || (*lm_display_meta)->num_circles == MAX_ELEMENTS_IN_DISPLAY_META) {
+      *lm_display_meta = nvds_acquire_display_meta_from_pool(batch_meta);
+      nvds_add_display_meta_to_frame(frame_meta, *lm_display_meta);
+    }
+
+    NvOSD_CircleParams *cp = &(*lm_display_meta)->circle_params[(*lm_display_meta)->num_circles];
+    cp->xc = (guint)MIN(app_config.streammux.width  - 1, MAX(0, xc));
+    cp->yc = (guint)MIN(app_config.streammux.height - 1, MAX(0, yc));
+    cp->radius = 6;
+    cp->circle_color.red   = 1.0f;
+    cp->circle_color.green = 1.0f;
+    cp->circle_color.blue  = 1.0f;
+    cp->circle_color.alpha = 1.0f;
+    cp->has_bg_color = 1;
+    cp->bg_color.red   = 0.0f;
+    cp->bg_color.green = 0.0f;
+    cp->bg_color.blue  = 1.0f;
+    cp->bg_color.alpha = 1.0f;
+    (*lm_display_meta)->num_circles++;
+  }
+}
+
+
 static GstPadProbeReturn
 nvosd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
 {
+  //wait 1 *1000ms for test
+  //g_usleep(1000 * 1000);
+
   GstBuffer *buf = (GstBuffer *) info->data;
   NvDsBatchMeta *batch_meta = gst_buffer_get_nvds_batch_meta(buf);
 
@@ -245,7 +303,14 @@ nvosd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_da
   for (l_frame = batch_meta->frame_meta_list; l_frame != NULL; l_frame = l_frame->next) {
     NvDsFrameMeta *frame_meta = (NvDsFrameMeta *) (l_frame->data);
 
-
+    GST_INFO ("stream %d==%d, source [%d X %d], pipeline size [%d X %d]\n", 
+            frame_meta->source_id,
+            frame_meta->pad_index,
+            frame_meta->source_frame_width,
+            frame_meta->source_frame_height, 
+            frame_meta->pipeline_width, // = streammux width
+            frame_meta->pipeline_height // = streammux height
+          );
     // Add NTP timestamp overlay (once per frame)
     if (frame_meta->ntp_timestamp) {
       NvDsDisplayMeta *display_meta = nvds_acquire_display_meta_from_pool(batch_meta);
@@ -296,48 +361,19 @@ nvosd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_da
     NvDsMetaList *l_obj = NULL;
     for (l_obj = frame_meta->obj_meta_list; l_obj != NULL; l_obj = l_obj->next) {
       NvDsObjectMeta *obj_meta = (NvDsObjectMeta *) (l_obj->data);
-
       set_custom_bbox(obj_meta);
+      
+      // Draw landmarks (circles) for display
+      draw_landmark_circles(batch_meta, frame_meta, obj_meta, &display_meta);
 
-      // Draw landmarks (circles) if available
-      if (obj_meta->mask_params.data && obj_meta->mask_params.size > 0) {
-        guint num_joints = obj_meta->mask_params.size / (sizeof(float) * 3);
-        
-        gfloat gain = MIN((gfloat) obj_meta->mask_params.width / app_config.streammux.width, 
-                          (gfloat) obj_meta->mask_params.height / app_config.streammux.height);
-        gfloat pad_x = (obj_meta->mask_params.width - app_config.streammux.width * gain) * 0.5f;
-        gfloat pad_y = (obj_meta->mask_params.height - app_config.streammux.height * gain) * 0.5f;
-
-        for (guint i = 0; i < num_joints; ++i) {
-          gfloat xc = (obj_meta->mask_params.data[i * 3 + 0] - pad_x) / gain;
-          gfloat yc = (obj_meta->mask_params.data[i * 3 + 1] - pad_y) / gain;
-          gfloat confidence = obj_meta->mask_params.data[i * 3 + 2];
-
-          if (confidence < 0.5) {
-            continue;
-          }
-
-          if (!display_meta || display_meta->num_circles == MAX_ELEMENTS_IN_DISPLAY_META) {
-            display_meta = nvds_acquire_display_meta_from_pool(batch_meta);
-            nvds_add_display_meta_to_frame(frame_meta, display_meta);
-          }
-
-          NvOSD_CircleParams *circle_params = &display_meta->circle_params[display_meta->num_circles];
-          circle_params->xc = (guint) MIN(app_config.streammux.width - 1, MAX(0, xc));
-          circle_params->yc = (guint) MIN(app_config.streammux.height - 1, MAX(0, yc));
-          circle_params->radius = 6;
-          circle_params->circle_color.red = 1.0;
-          circle_params->circle_color.green = 1.0;
-          circle_params->circle_color.blue = 1.0;
-          circle_params->circle_color.alpha = 1.0;
-          circle_params->has_bg_color = 1;
-          circle_params->bg_color.red = 0.0;
-          circle_params->bg_color.green = 0.0;
-          circle_params->bg_color.blue = 1.0;
-          circle_params->bg_color.alpha = 1.0;
-          display_meta->num_circles++;
-        }
-      }
+      // Free mask_params after processing
+      // if (obj_meta->mask_params.data) {
+      //   g_free(obj_meta->mask_params.data);
+      //   obj_meta->mask_params.data = NULL;
+      //   obj_meta->mask_params.width = 0;
+      //   obj_meta->mask_params.height = 0;
+      //   obj_meta->mask_params.size = 0;
+      // }
     }
 
   }
@@ -527,7 +563,9 @@ appsink_new_sample_callback(GstElement *appsink, gpointer user_data)
      
       //if (frame_meta->frame_num % FRAME_SAVE_INTERVAL == 0) {
       // Check if frame has any detected objects (faces)
-      if (frame_meta->obj_meta_list != NULL) {
+      // This variable holds the count for the current frame
+      if (  frame_meta->obj_meta_list != NULL 
+        && frame_meta->num_obj_meta > 0 ) {
         image_rel_path = save_frame_to_jpeg(surface, frame_meta,
                           app_config.frame_save.dir, app_config.frame_save.quality);
         GST_DEBUG("Saved frame %d to %s",
@@ -555,15 +593,6 @@ appsink_new_sample_callback(GstElement *appsink, gpointer user_data)
 
       if (obj_json)
         g_ptr_array_add(obj_jsons, obj_json);
-
-      // Free mask_params after processing
-      if (obj_meta->mask_params.data) {
-        g_free(obj_meta->mask_params.data);
-        obj_meta->mask_params.data = NULL;
-        obj_meta->mask_params.width = 0;
-        obj_meta->mask_params.height = 0;
-        obj_meta->mask_params.size = 0;
-      }
     }
 
     // Write per-frame JSON to disk if enabled (only when objects were detected)
@@ -1132,6 +1161,7 @@ main(gint argc, char *argv[])
   GST_DEBUG("\n");
 
   g_main_loop_run(loop);
+  g_print("\nPipeline stopped, performing cleanup...\n");
 
   gst_element_set_state(pipeline, GST_STATE_NULL);
 
