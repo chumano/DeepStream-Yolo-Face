@@ -375,10 +375,13 @@ nvosd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_da
     NvDsMetaList *l_obj = NULL;
     for (l_obj = frame_meta->obj_meta_list; l_obj != NULL; l_obj = l_obj->next) {
       NvDsObjectMeta *obj_meta = (NvDsObjectMeta *) (l_obj->data);
-      set_custom_bbox(obj_meta);
       
+      if (app_config.osd.draw_custom_bbox)
+        set_custom_bbox(obj_meta);
+
       // Draw landmarks (circles) for display
-      draw_landmark_circles(batch_meta, frame_meta, obj_meta, &display_meta);
+      if (app_config.osd.draw_landmarks)
+        draw_landmark_circles(batch_meta, frame_meta, obj_meta, &display_meta);
 
       // Free mask_params after processing
       // if (obj_meta->mask_params.data) {

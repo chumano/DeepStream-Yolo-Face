@@ -45,6 +45,8 @@ typedef struct {
 typedef struct {
   gint     process_mode;  /**< 0=CPU, 1=GPU; default 1 (MODE_GPU) */
   gboolean qos;           /**< default FALSE */
+  gboolean draw_landmarks;        /**< TRUE → draw landmark circles on OSD; default TRUE */
+  gboolean draw_custom_bbox;      /**< TRUE → apply custom bbox style; default TRUE */
 } AppOsdConfig;
 
 /** Display sink (nveglglessink / nv3dsink) */

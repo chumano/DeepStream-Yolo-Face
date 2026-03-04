@@ -56,6 +56,8 @@ AppConfig app_config = {
   .osd = {
     .process_mode = 1,   /* MODE_GPU */
     .qos          = FALSE,
+    .draw_landmarks = TRUE,
+    .draw_custom_bbox = TRUE,
   },
 
   /* Display sink */
@@ -209,6 +211,8 @@ parse_config_file(const gchar *config_file, GError **error)
   /* ── [osd] ───────────────────────────────────────────────── */
   GET_INT ("osd", "process-mode", app_config.osd.process_mode);
   GET_BOOL("osd", "qos",          app_config.osd.qos);
+  GET_BOOL("osd", "draw-landmarks",  app_config.osd.draw_landmarks);
+  GET_BOOL("osd", "draw-custom-bbox",app_config.osd.draw_custom_bbox);
 
   /* ── [display] ───────────────────────────────────────────── */
   GET_BOOL("display", "disabled",      app_config.display.disabled);
@@ -508,9 +512,11 @@ static void print_app_config(void) {
     app_config.tracker.ll_lib_file ? app_config.tracker.ll_lib_file : "(none)",
     app_config.tracker.ll_config_file ? app_config.tracker.ll_config_file : "(none)",
     app_config.tracker.display_tracking_id ? "TRUE" : "FALSE");
-  g_print("\n  osd: process_mode=%d qos=%s",
+  g_print("\n  osd: process_mode=%d qos=%s draw_landmarks=%s draw_custom_bbox=%s",
     app_config.osd.process_mode,
-    app_config.osd.qos ? "TRUE" : "FALSE");
+    app_config.osd.qos ? "TRUE" : "FALSE",
+    app_config.osd.draw_landmarks ? "TRUE" : "FALSE",
+    app_config.osd.draw_custom_bbox ? "TRUE" : "FALSE");
   g_print("\n  display: disabled=%s window_width=%u window_height=%u sync=%s async_sink=%s qos=%s",
     app_config.display.disabled ? "TRUE" : "FALSE",
     app_config.display.window_width,
