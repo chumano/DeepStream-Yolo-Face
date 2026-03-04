@@ -261,6 +261,58 @@ draw_landmark_circles(NvDsBatchMeta *batch_meta, NvDsFrameMeta *frame_meta,
   }
 }
 
+/**
+ * Add an NTP timestamp text overlay to the given frame using a display meta
+ * acquired from batch_meta's pool. Does nothing if ntp_timestamp is zero.
+ */
+static void
+add_ntp_timestamp_overlay(NvDsBatchMeta *batch_meta, NvDsFrameMeta *frame_meta)
+{
+  if (!frame_meta->ntp_timestamp)
+    return;
+
+  NvDsDisplayMeta *display_meta = nvds_acquire_display_meta_from_pool(batch_meta);
+  if (!display_meta)
+    return;
+
+  // Convert NTP timestamp (nanoseconds) to human-readable string
+  gdouble timestamp_sec = (gdouble)frame_meta->ntp_timestamp / 1e9;
+  time_t  timestamp_time = (time_t)timestamp_sec;
+  struct tm *tm_info = localtime(&timestamp_time);
+
+  gchar timestamp_str[64];
+  strftime(timestamp_str, sizeof(timestamp_str), "%Y-%m-%d %H:%M:%S", tm_info);
+
+  gint millisec = (gint)((timestamp_sec - (gdouble)timestamp_time) * 1000);
+
+  gchar full_timestamp[128];
+  g_snprintf(full_timestamp, sizeof(full_timestamp),
+             "FRAME %d, NTP: %s.%03d",
+             frame_meta->frame_num, timestamp_str, millisec);
+
+  // Configure text overlay parameters
+  NvOSD_TextParams *txt_params  = &display_meta->text_params[0];
+  display_meta->num_labels = 1;
+
+  txt_params->display_text = g_strdup(full_timestamp);
+  txt_params->x_offset     = app_config.osd_text.ntp_text_x_offset;
+  txt_params->y_offset     = app_config.osd_text.ntp_text_y_offset;
+
+  txt_params->font_params.font_name          = (gchar *)"Ubuntu";
+  txt_params->font_params.font_size          = app_config.osd_text.ntp_text_font_size;
+  txt_params->font_params.font_color.red     = 1.0f;
+  txt_params->font_params.font_color.green   = 1.0f;
+  txt_params->font_params.font_color.blue    = 1.0f;
+  txt_params->font_params.font_color.alpha   = 1.0f;
+
+  txt_params->set_bg_clr           = 1;
+  txt_params->text_bg_clr.red      = 0.0f;
+  txt_params->text_bg_clr.green    = 0.0f;
+  txt_params->text_bg_clr.blue     = 0.0f;
+  txt_params->text_bg_clr.alpha    = 0.7f;
+
+  nvds_add_display_meta_to_frame(frame_meta, display_meta);
+}
 
 static GstPadProbeReturn
 nvosd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
@@ -303,54 +355,16 @@ nvosd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_da
   for (l_frame = batch_meta->frame_meta_list; l_frame != NULL; l_frame = l_frame->next) {
     NvDsFrameMeta *frame_meta = (NvDsFrameMeta *) (l_frame->data);
 
-    GST_INFO ("stream %d==%d, source [%d X %d], pipeline size [%d X %d]\n", 
+    GST_INFO ("stream %d==%d, source [%d X %d], streammux size [%d X %d]\n", 
             frame_meta->source_id,
             frame_meta->pad_index,
             frame_meta->source_frame_width,
             frame_meta->source_frame_height, 
-            frame_meta->pipeline_width, // = streammux width
-            frame_meta->pipeline_height // = streammux height
+            app_config.streammux.width, // = streammux width
+            app_config.streammux.height // = streammux height
           );
     // Add NTP timestamp overlay (once per frame)
-    if (frame_meta->ntp_timestamp) {
-      NvDsDisplayMeta *display_meta = nvds_acquire_display_meta_from_pool(batch_meta);
-      
-      // Convert NTP timestamp to human-readable format
-      gdouble timestamp_sec = (gdouble)frame_meta->ntp_timestamp / 1e9;
-      time_t timestamp_time = (time_t)timestamp_sec;
-      struct tm *tm_info = localtime(&timestamp_time);
-      
-      gchar timestamp_str[128];
-      strftime(timestamp_str, sizeof(timestamp_str), "%Y-%m-%d %H:%M:%S", tm_info);
-      
-      // Add milliseconds
-      gint millisec = (gint)((timestamp_sec - (time_t)timestamp_sec) * 1000);
-      gchar full_timestamp[128];
-      g_snprintf(full_timestamp, sizeof(full_timestamp), "FRAME %d, NTP: %s.%03d", frame_meta->frame_num, timestamp_str, millisec);
-      
-      // Configure text parameters
-      NvOSD_TextParams *txt_params = &display_meta->text_params[0];
-      display_meta->num_labels = 1;
-      
-      txt_params->display_text = g_strdup(full_timestamp);
-      txt_params->x_offset = app_config.osd_text.ntp_text_x_offset;
-      txt_params->y_offset = app_config.osd_text.ntp_text_y_offset;
-      
-      txt_params->font_params.font_name = (gchar*)"Ubuntu";
-      txt_params->font_params.font_size = app_config.osd_text.ntp_text_font_size;
-      txt_params->font_params.font_color.red = 1.0;
-      txt_params->font_params.font_color.green = 1.0;
-      txt_params->font_params.font_color.blue = 1.0;
-      txt_params->font_params.font_color.alpha = 1.0;
-      
-      txt_params->set_bg_clr = 1;
-      txt_params->text_bg_clr.red = 0.0;
-      txt_params->text_bg_clr.green = 0.0;
-      txt_params->text_bg_clr.blue = 0.0;
-      txt_params->text_bg_clr.alpha = 0.7;
-      
-      nvds_add_display_meta_to_frame(frame_meta, display_meta);
-    }
+    add_ntp_timestamp_overlay(batch_meta, frame_meta);
 
     // Only draw if inference was done on this frame
     if (!frame_meta->bInferDone) {
@@ -1031,6 +1045,7 @@ main(gint argc, char *argv[])
 
   g_object_set(G_OBJECT(nvstreammux),
      "batch-size", app_config.streammux.batch_size,
+     "enable-padding", app_config.streammux.enable_padding,
      "batched-push-timeout", app_config.streammux.batched_push_timeout,
      "width", app_config.streammux.width, "height", app_config.streammux.height, 
      "live-source", 1,

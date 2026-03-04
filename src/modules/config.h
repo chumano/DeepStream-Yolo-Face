@@ -21,6 +21,7 @@ typedef struct {
   guint batch_size;             /**< default 1 */
   guint width;                  /**< default 1920 */
   guint height;                 /**< default 1080 */
+  gboolean enable_padding;      /**< default FALSE */
   guint batched_push_timeout;   /**< microseconds, default 25000 */
 } AppStreamMuxConfig;
 

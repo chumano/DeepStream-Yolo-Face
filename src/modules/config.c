@@ -25,6 +25,7 @@ AppConfig app_config = {
     .batch_size            = 1,
     .width                 = 1920,
     .height                = 1080,
+    .enable_padding        = FALSE,
     .batched_push_timeout  = 25000,  /* µs */
   },
 
@@ -186,6 +187,7 @@ parse_config_file(const gchar *config_file, GError **error)
   GET_INT("streammux", "batch-size",           app_config.streammux.batch_size);
   GET_INT("streammux", "width",                app_config.streammux.width);
   GET_INT("streammux", "height",               app_config.streammux.height);
+  GET_BOOL("streammux", "enable-padding",      app_config.streammux.enable_padding);
   GET_INT("streammux", "batched-push-timeout", app_config.streammux.batched_push_timeout);
 
   /* ── [infer] ─────────────────────────────────────────────── */
@@ -487,11 +489,12 @@ static void print_app_config(void) {
   } else {
     g_print("(none)");
   }
-  g_print("\n  streammux: batch_size=%u width=%u height=%u batched_push_timeout=%u",
+  g_print("\n  streammux: batch_size=%u width=%u height=%u batched_push_timeout=%u enable_padding=%s",
     app_config.streammux.batch_size,
     app_config.streammux.width,
     app_config.streammux.height,
-    app_config.streammux.batched_push_timeout);
+    app_config.streammux.batched_push_timeout,
+    app_config.streammux.enable_padding ? "TRUE" : "FALSE");
   g_print("\n  infer: config_file=%s use_triton=%s qos=%s",
     app_config.infer.config_file ? app_config.infer.config_file : "(none)",
     app_config.infer.use_triton ? "TRUE" : "FALSE",
