@@ -24,6 +24,9 @@
 - [x] refactor deepstream.c to deepstream.cpp
 - [x] pipepline monitoring and metrics
 - [x] pipeline elements configuration
+- [ ] handle frame with padding by nvstreammux 
+  - frame image save with padding
+  - bounding box need to be adjusted to ensure the correct position on the padded frame image
 - [ ] handle dynamic input sources (add/remove camera at runtime) through rest server
   - https://docs.nvidia.com/metropolis/deepstream/7.1/text/DS_plugin_gst-nvmultiurisrcbin.html
 - [ ] check region of interest (ROI) for face detection

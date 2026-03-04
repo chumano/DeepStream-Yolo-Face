@@ -216,10 +216,6 @@ bus_call(GstBus *bus, GstMessage *message, gpointer user_data)
 }
 
 
-// =============================================================================
-// JSON File Save Helper
-// =============================================================================
-
 /**
  * Write a frame-level JSON file to disk.
  * File path: {json_save.dir}/source_{source_id}/frame_{frame_num:06d}.json
