@@ -415,6 +415,7 @@ init_detection_manager(void)
           app_config.kafka.broker, app_config.kafka.topic);
 }
 
+
 static void
 cleanup_detection_manager(void)
 {
@@ -430,24 +431,11 @@ cleanup_detection_manager(void)
 // Main Function
 // =============================================================================
 
-gint
-main(gint argc, char *argv[])
+static void
+log_parsed_config(void)
 {
-  // Initialize GStreamer and GST debug category before any GST_* logging
-  gst_init(&argc, &argv);
-  GST_DEBUG_CATEGORY_INIT(deepstream_debug_category, "deepstream", 0, "DeepStream Face App");
-
-  // ============================================================================
-  // Parse command-line options
-  if (!parse_command_line(argc, argv)) {
-    g_printerr("ERROR - Failed to parse command-line options\n");
-    return -1;
-  }
-  
-  //================================================
-  // Debug: Print what was actually parsed
-  GST_INFO("\n");
-  GST_INFO("DEBUG - After parsing:\n");
+  GST_INFO("");
+  GST_INFO("DEBUG - After parsing:");
   GST_INFO("  NUM_SOURCES: %d", app_config.source.count);
   if (app_config.source.uris) {
     for (guint i = 0; i < app_config.source.count; i++) {
@@ -472,7 +460,37 @@ main(gint argc, char *argv[])
     GST_INFO("FRAME_SAVE_DIR: %s",     app_config.frame_save.dir);
     GST_INFO("FRAME_SAVE_QUALITY: %u", app_config.frame_save.quality);
   }
-  GST_INFO("\n");
+  GST_INFO("");
+}
+
+gint
+main(gint argc, char *argv[])
+{
+  // Initialize GStreamer and GST debug category before any GST_* logging
+  gst_init(&argc, &argv);
+  GST_DEBUG_CATEGORY_INIT(deepstream_debug_category, "deepstream", 0, "DeepStream Face App");
+
+  // ============================================================================
+  // Parse command-line options
+  if (!parse_command_line(argc, argv)) {
+    g_printerr("ERROR - Failed to parse command-line options\n");
+    return -1;
+  }
+   
+  // Check if running on Jetson by querying CUDA device properties
+  gint current_device = -1;
+  cudaGetDevice(&current_device);
+ 
+  struct cudaDeviceProp prop;
+  cudaGetDeviceProperties(&prop, current_device);
+
+  if (prop.integrated) {
+    app_config.jetson = TRUE;
+  }
+  
+  //================================================
+  // Debug: Print what was actually parsed
+  log_parsed_config();
 
   // ============================================================================
   // wait user to press enter key to start
@@ -496,17 +514,7 @@ main(gint argc, char *argv[])
     GST_INFO("Frame saving enabled: dir=%s, quality=%u", 
             app_config.frame_save.dir, app_config.frame_save.quality);
   }
-  // ============================================================================
 
-  gint current_device = -1;
-  cudaGetDevice(&current_device);
- 
-  struct cudaDeviceProp prop;
-  cudaGetDeviceProperties(&prop, current_device);
-
-  if (prop.integrated) {
-    app_config.jetson = TRUE;
-  }
 
   // ============================================================================
   // Initialize pipeline monitor
@@ -569,6 +577,7 @@ main(gint argc, char *argv[])
     pipeline_monitor = NULL;
   }
 
+  // ===============================================
   // Cleanup detection manager
   cleanup_detection_manager();
 
