@@ -81,8 +81,6 @@ encode_crop_to_base64_jpeg(NvBufSurface *surface, CropBox *crop_box, gint qualit
     return NULL;
   }
 
-  // ...existing validation code...
-
   if (crop_box->left >= surf_params->width || crop_box->top >= surf_params->height ||
       crop_box->width == 0 || crop_box->height == 0) {
     GST_ERROR("Invalid crop box: left=%u, top=%u, width=%u, height=%u (surface: %dx%d)",
@@ -103,7 +101,7 @@ encode_crop_to_base64_jpeg(NvBufSurface *surface, CropBox *crop_box, gint qualit
     return NULL;
   }
 
-  // ...existing surface creation and transform code...
+  // Transform the specified crop region from the input surface to a new RGBA surface
   NvBufSurface *dst_surface = NULL;
   NvBufSurfaceCreateParams create_params = {0};
   create_params.gpuId = surface->gpuId;
@@ -124,7 +122,7 @@ encode_crop_to_base64_jpeg(NvBufSurface *surface, CropBox *crop_box, gint qualit
     return NULL;
   }
   
-  // ...existing transform code...
+  // Transform the specified crop region from the input surface to a new surface
   NvBufSurfTransformParams transform_params = {0};
   NvBufSurfTransformRect src_rect = {0};
   NvBufSurfTransformRect dst_rect = {0};
