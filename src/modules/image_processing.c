@@ -181,7 +181,7 @@ encode_crop_to_base64_jpeg(NvBufSurface *surface, CropBox *crop_box, gint qualit
 
   cudaStreamSynchronize(0);
   
-  // ...existing CPU copy and JPEG encoding code...
+  // Copy transformed surface data to CPU and encode to JPEG
   NvBufSurfaceParams *dst_params = &dst_surface->surfaceList[0];
   guint crop_w = dst_params->width;
   guint crop_h = dst_params->height;
@@ -194,41 +194,9 @@ encode_crop_to_base64_jpeg(NvBufSurface *surface, CropBox *crop_box, gint qualit
     NvBufSurfaceDestroy(dst_surface);
     return NULL;
   }
-  
+
   gboolean data_copied = FALSE;
-  
-  // if (dst_surface->memType == NVBUF_MEM_CUDA_UNIFIED && dst_params->dataPtr) {
-  //   cudaError_t cuda_err = cudaMemcpy(cpu_buffer, dst_params->dataPtr, buffer_size, cudaMemcpyDeviceToHost);
-  //   if (cuda_err == cudaSuccess) {
-  //     data_copied = TRUE;
-  //   } else {
-  //     cudaDeviceSynchronize();
-  //     memcpy(cpu_buffer, dst_params->dataPtr, buffer_size);
-  //     data_copied = TRUE;
-  //   }
-  // }
-  
-  // if (!data_copied && dst_surface->memType == NVBUF_MEM_CUDA_UNIFIED) {
-  //   if (NvBufSurfaceMap(dst_surface, 0, 0, NVBUF_MAP_READ) == 0) {
-  //     NvBufSurfaceSyncForCpu(dst_surface, 0, 0);
-      
-  //     guchar *mapped_data = NULL;
-  //     if (dst_params->mappedAddr.addr[0]) {
-  //       mapped_data = (guchar *)dst_params->mappedAddr.addr[0];
-  //     } else if (dst_params->dataPtr) {
-  //       mapped_data = (guchar *)dst_params->dataPtr;
-  //     }
-      
-  //     if (mapped_data) {
-  //       memcpy(cpu_buffer, mapped_data, buffer_size);
-  //       data_copied = TRUE;
-  //     }
-      
-  //     NvBufSurfaceUnMap(dst_surface, 0, 0);
-  //   }
-  // }
-  
-  if (!data_copied && dst_params->dataPtr) {
+  if (dst_params->dataPtr) {
     cudaError_t cuda_err = cudaMemcpy(cpu_buffer, dst_params->dataPtr, buffer_size, cudaMemcpyDeviceToHost);
     if (cuda_err == cudaSuccess) {
       data_copied = TRUE;
@@ -424,7 +392,7 @@ save_frame_to_jpeg(NvBufSurface *surface, NvDsFrameMeta *frame_meta,
 
   cudaStreamSynchronize(0); // Ensure transform is complete before accessing data
 
-  // ...existing CPU copy and JPEG encoding code...
+  // Copy transformed surface data to CPU and encode to JPEG
   NvBufSurfaceParams *dst_params = &dst_surface->surfaceList[0];
   guint width = dst_params->width;
   guint height = dst_params->height;
