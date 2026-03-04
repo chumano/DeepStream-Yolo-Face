@@ -38,6 +38,7 @@ class Config:
     save_images: bool = field(default_factory=lambda: os.getenv("SAVE_IMAGES", "True").lower() in ("1", "true", "yes"))
     save_aligned: bool = field(default_factory=lambda: os.getenv("SAVE_ALIGNED", "True").lower() in ("1", "true", "yes"))
     save_landmarks: bool = field(default_factory=lambda: os.getenv("SAVE_LANDMARKS", "False").lower() in ("1", "true", "yes"))
+    save_qdrant: bool = field(default_factory=lambda: os.getenv("SAVE_QDRANT", "False").lower() in ("1", "true", "yes"))
     qdrant_url: str = field(default_factory=lambda: os.getenv("QDRANT_URL", "http://localhost:6333"))
     qdrant_collection: str = field(default_factory=lambda: os.getenv("QDRANT_COLLECTION", "faces"))
     embed_url: str = field(default_factory=lambda: os.getenv("EMBED_URL", "http://localhost:5000/embed"))
@@ -805,15 +806,18 @@ class FaceDetectionConsumer:
         if not embedding:
             logger.error("❌ Failed to generate embedding")
             return
+        else:
+            logger.info(f"✨ Embedding generated (time: {elapsed:.3f}s)")
         
         # Step 5: Save embedding to Qdrant
-        point_id = self.embedding_service.save_embedding(embedding, detection, aligned_path)
-        
-        if point_id:
-            self.embeddings_saved += 1
-            logger.info(f"💾 Embedding saved to Qdrant (ID: {point_id}, time: {elapsed:.3f}s)")
-        else:
-            logger.error("❌ Failed to save embedding to Qdrant")
+        if self.config.save_qdrant:
+            point_id = self.embedding_service.save_embedding(embedding, detection, aligned_path)
+            
+            if point_id:
+                self.embeddings_saved += 1
+                logger.info(f"💾 Embedding saved to Qdrant (ID: {point_id}, time: {elapsed:.3f}s)")
+            else:
+                logger.error("❌ Failed to save embedding to Qdrant")
     
     def _maybe_print_statistics(self) -> None:
         """Print statistics if interval elapsed."""
