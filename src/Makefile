@@ -102,6 +102,7 @@ debug2: clean_images $(APP)
 run_triton: clean_images $(APP)
 	GST_DEBUG=deepstream:$(LOG) ./$(APP) --config /app/configs/app_triton.ini
 
+# Run with multiple input sources (e.g., 2 video files)
 run2: clean_images $(APP)
 	GST_DEBUG=deepstream:$(LOG) ./$(APP) --config /app/configs/app_multi.ini
 

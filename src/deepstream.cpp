@@ -9,6 +9,7 @@
 #include "modules/image_processing.h"
 #include "modules/json_builder.h"
 #include "modules/osd_probe.h"
+#include "modules/pipeline_builder.h"
 // GST_DEBUG_CATEGORY_STATIC to GST_DEBUG_CATEGORY  
 //which makes the symbol externally visible so that osd_probe.c
 GST_DEBUG_CATEGORY(deepstream_debug_category);
@@ -176,45 +177,6 @@ process_traffic_object(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta,
       (guint)obj_meta->rect_params.height,
       obj_meta->unique_component_id);
 }
-
-static gboolean
-bus_call(GstBus *bus, GstMessage *message, gpointer user_data)
-{
-  GMainLoop *loop = (GMainLoop *) user_data;
-  switch (GST_MESSAGE_TYPE(message)) {
-    case GST_MESSAGE_EOS:
-    {
-      GST_DEBUG("EOS");
-      g_main_loop_quit(loop);
-      break;
-    }
-    case GST_MESSAGE_WARNING:
-    {
-      gchar *debug;
-      GError *error;
-      gst_message_parse_warning(message, &error, &debug);
-      GST_WARNING("%s - %s", error->message, debug);
-      g_free(debug);
-      g_error_free(error);
-      break;
-    }
-    case GST_MESSAGE_ERROR:
-    {
-      gchar *debug;
-      GError *error;
-      gst_message_parse_error(message, &error, &debug);
-      GST_ERROR("%s - %s", error->message, debug);
-      g_free(debug);
-      g_error_free(error);
-      g_main_loop_quit(loop);
-      break;
-    }
-    default:
-      break;
-  }
-  return TRUE;
-}
-
 
 /**
  * Write a frame-level JSON file to disk.
@@ -413,86 +375,6 @@ appsink_new_sample_callback(GstElement *appsink, gpointer user_data)
 }
 
 // =============================================================================
-// Source Bin Creation
-// =============================================================================
-static void
-uridecodebin_child_added_callback(GstChildProxy *child_proxy, GObject *object, gchar *name, gpointer user_data)
-{
-  if (g_strrstr(name, "decodebin")) {
-    g_signal_connect(object, "child-added", G_CALLBACK(uridecodebin_child_added_callback), user_data);
-  }
-  else if (g_strrstr(name, "nvv4l2decoder")) {
-    g_object_set(object, "drop-frame-interval", 0, "num-extra-surfaces", 1, "qos", 0, NULL);
-    if (app_config.jetson) {
-      g_object_set(object, "enable-max-performance", 1, NULL);
-    }
-    else {
-      g_object_set(object, "cudadec-memtype", 0, "gpu-id", app_config.gpu_id, NULL);
-    }
-  }
-}
-
-static void
-uridecodebin_pad_added_callback(GstElement *decodebin, GstPad *pad, gpointer user_data)
-{
-  GstPad *nvstreammux_sink_pad = (GstPad *) user_data;
-
-  GstCaps *caps = gst_pad_get_current_caps(pad);
-  if (!caps) {
-    caps = gst_pad_query_caps(pad, NULL);
-  }
-
-  const GstStructure *str = gst_caps_get_structure(caps, 0);
-  const gchar *name = gst_structure_get_name(str);
-  GstCapsFeatures *features = gst_caps_get_features(caps, 0);
-
-  if (!strncmp(name, "video", 5)) {
-    if (gst_caps_features_contains(features, "memory:NVMM")) {
-      if (gst_pad_link(pad, nvstreammux_sink_pad) != GST_PAD_LINK_OK) {
-        GST_ERROR("Failed to link source to nvstreammux sink pad");
-      }
-    }
-    else {
-      GST_ERROR("decodebin did not pick NVIDIA decoder plugin");
-    }
-  }
-
-  gst_caps_unref(caps);
-}
-
-static GstElement *
-create_uridecodebin(guint stream_id, const gchar *uri, GstElement *nvstreammux)
-{
-  gchar bin_name[32] = { };
-  g_snprintf(bin_name, 32, "source-bin-%04d", stream_id);
-
-  GstElement *uridecodebin = gst_element_factory_make("uridecodebin", bin_name);
-
-  if (g_strrstr(uri, "rtsp://")) {
-    configure_source_for_ntp_sync(uridecodebin);
-  }
-
-  g_object_set(G_OBJECT(uridecodebin), "uri", uri, NULL);
-
-  gchar pad_name[16];
-  g_snprintf(pad_name, 16, "sink_%u", stream_id);
-
-  GstPad *nvstreammux_sink_pad = gst_element_get_request_pad(nvstreammux, pad_name);
-  if (!nvstreammux_sink_pad) {
-    GST_ERROR("Failed to get nvstreammux %s pad", pad_name);
-    return NULL;
-  }
-
-  g_signal_connect(G_OBJECT(uridecodebin), "pad-added", G_CALLBACK(uridecodebin_pad_added_callback),
-      nvstreammux_sink_pad);
-  g_signal_connect(G_OBJECT(uridecodebin), "child-added", G_CALLBACK(uridecodebin_child_added_callback), NULL);
-
-  gst_object_unref(nvstreammux_sink_pad);
-
-  return uridecodebin;
-}
-
-// =============================================================================
 // Detection Manager Callback
 // =============================================================================
 
@@ -652,298 +534,21 @@ main(gint argc, char *argv[])
   // ============================================================================
   // Create GStreamer pipeline
   GST_INFO("Creating GStreamer pipeline...");
-  GstElement *pipeline = gst_pipeline_new("deepstream");
-  if (!pipeline) {
+  AppPipeline *ap = create_app_pipeline(
+      loop,
+      G_CALLBACK(appsink_new_sample_callback),
+      pipeline_monitor);
+  if (!ap) {
     g_printerr("ERROR - Failed to create pipeline\n");
     return -1;
   }
 
-  GstElement *nvstreammux = gst_element_factory_make("nvstreammux", "nvstreammux");
-  if (!nvstreammux || !gst_bin_add(GST_BIN(pipeline), nvstreammux)) {
-    g_printerr("ERROR - Failed to create nvstreammux\n");
-    return -1;
-  }
-
-  // GstElement *uridecodebin = create_uridecodebin(0, SOURCE, nvstreammux);
-  // if (!uridecodebin || !gst_bin_add(GST_BIN(pipeline), uridecodebin)) {
-  //   g_printerr("ERROR - Failed to create uridecodebin\n");
-  //   return -1;
-  // }
-  for (guint i = 0; i < app_config.source.count; i++) {
-    GstElement *uridecodebin = create_uridecodebin(i, app_config.source.uris[i], nvstreammux);
-    if (!uridecodebin || !gst_bin_add(GST_BIN(pipeline), uridecodebin)) {
-      g_printerr("ERROR - Failed to create uridecodebin for source %d\n", i);
-      return -1;
-    }
-  }
-
-  GstElement *nvinfer = gst_element_factory_make(
-      app_config.infer.use_triton ? "nvinferserver" : "nvinfer",
-      app_config.infer.use_triton ? "nvinferserver" : "nvinfer");
-  if (!nvinfer || !gst_bin_add(GST_BIN(pipeline), nvinfer)) {
-    g_printerr("ERROR - Failed to create %s\n", app_config.infer.use_triton ? "nvinferserver" : "nvinfer");
-    return -1;
-  }
-
-  // Secondary nvinferserver (Triton) — enabled only when infer2.config_file is set
-  GstElement *nvinfer2 = NULL;
-  if (app_config.infer2.config_file) {
-    nvinfer2 = gst_element_factory_make("nvinferserver", "nvinferserver2");
-    if (!nvinfer2 || !gst_bin_add(GST_BIN(pipeline), nvinfer2)) {
-      g_printerr("ERROR - Failed to create nvinferserver2\n");
-      return -1;
-    }
-  }
-
-  GstElement *nvtracker = gst_element_factory_make("nvtracker", "nvtracker");
-  if (!nvtracker || !gst_bin_add(GST_BIN(pipeline), nvtracker)) {
-    g_printerr("ERROR - Failed to create nvtracker\n");
-    return -1;
-  }
-
-  GstElement *nvvidconv = gst_element_factory_make("nvvideoconvert", "nvvidconv");
-  if (!nvvidconv || !gst_bin_add(GST_BIN(pipeline), nvvidconv)) {
-    g_printerr("ERROR - Failed to create nvvideoconvert\n");
-    return -1;
-  }
-
-  GstElement *capsfilter = gst_element_factory_make("capsfilter", "capsfilter");
-  if (!capsfilter || !gst_bin_add(GST_BIN(pipeline), capsfilter)) {
-    g_printerr("ERROR - Failed to create capsfilter\n");
-    return -1;
-  }
-
-
-  //================================================
-  GstElement *tee = gst_element_factory_make("tee", "tee");
-  if (!tee || !gst_bin_add(GST_BIN(pipeline), tee)) {
-    g_printerr("ERROR - Failed to create tee\n");
-    return -1;
-  }
-
-
-  //================================================
-  // Tạo display sink có điều kiện
-  GstElement *queue_display = NULL;
-  GstElement *nvosd  = NULL;
-  GstElement *nvsink = NULL;
-  if (!app_config.display.disabled) {
-    // queue
-    queue_display = gst_element_factory_make("queue", "queue_display");
-    if (!queue_display || !gst_bin_add(GST_BIN(pipeline), queue_display)) {
-      g_printerr("ERROR - Failed to create queue_display\n");
-      return -1;
-    }
-    
-    g_object_set(G_OBJECT(queue_display),
-        "max-size-buffers", app_config.queue.max_size_buffers,
-        "leaky", app_config.queue.leaky,
-        NULL);
-
-    if (pipeline_monitor) {
-      pipeline_monitor_add_queue(pipeline_monitor, "queue_display", queue_display);
-    }
-
-    // osd    
-    nvosd = gst_element_factory_make("nvdsosd", "nvdsosd");
-    if (!nvosd || !gst_bin_add(GST_BIN(pipeline), nvosd)) {
-      g_printerr("ERROR - Failed to create nvdsosd\n");
-      return -1;
-    }
-    
-    g_object_set(G_OBJECT(nvosd), "process-mode", app_config.osd.process_mode, "qos", (gint)app_config.osd.qos, NULL);
-    
-    if (!app_config.jetson) {
-      g_object_set(G_OBJECT(nvosd), "gpu_id", app_config.gpu_id, NULL);
-    }
-
-
-
-    // display sink
-    if (app_config.jetson) {
-      nvsink = gst_element_factory_make("nv3dsink", "nv3dsink");
-      if (!nvsink || !gst_bin_add(GST_BIN(pipeline), nvsink)) {
-        g_printerr("ERROR - Failed to create nv3dsink\n");
-        return -1;
-      }
-    }
-    else {
-      nvsink = gst_element_factory_make("nveglglessink", "nveglglessink");
-      if (!nvsink || !gst_bin_add(GST_BIN(pipeline), nvsink)) {
-        g_printerr("ERROR - Failed to create nveglglessink\n");
-        return -1;
-      }
-    }
-    
-    // Configure display sink
-    g_object_set(G_OBJECT(nvsink), "async", (gint)app_config.display.async_sink, "sync", (gint)app_config.display.sync, "qos", (gint)app_config.display.qos, NULL);
-    g_object_set(G_OBJECT(nvsink), "window-width", app_config.display.window_width, "window-height", app_config.display.window_height, NULL);
-  }
-
-  //================================================
-  GstElement *queue_app = gst_element_factory_make("queue", "queue_app");
-  if (!queue_app || !gst_bin_add(GST_BIN(pipeline), queue_app)) {
-    g_printerr("ERROR - Failed to create queue_app\n");
-    return -1;
-  }
-
-  g_object_set(G_OBJECT(queue_app),
-    "max-size-buffers", app_config.queue.max_size_buffers,
-    "leaky", app_config.queue.leaky,
-    NULL);
-
-  // Register queues with the pipeline monitor
-  if (pipeline_monitor) {
-    pipeline_monitor_add_queue(pipeline_monitor, "queue_app", queue_app);
-  }
-
-  GstElement *appsink = gst_element_factory_make("appsink", "appsink");
-  if (!appsink || !gst_bin_add(GST_BIN(pipeline), appsink)) {
-    g_printerr("ERROR - Failed to create appsink\n");
-    return -1;
-  }
-
-  // Configure appsink
-  g_object_set(G_OBJECT(appsink),
-    "emit-signals", TRUE,
-    "sync", (gint)app_config.appsink.sync,
-    "max-buffers", app_config.appsink.max_buffers,
-    "drop", (gint)app_config.appsink.drop,
-    NULL);
-  // Connect callback to appsink
-  g_signal_connect(appsink, "new-sample", G_CALLBACK(appsink_new_sample_callback), NULL);
-
-  
-  GstCaps *caps = gst_caps_from_string("video/x-raw(memory:NVMM), format=RGBA");
-  g_object_set(G_OBJECT(capsfilter), "caps", caps, NULL);
-  gst_caps_unref(caps);
-
-  g_object_set(G_OBJECT(nvstreammux),
-     "batch-size", app_config.streammux.batch_size,
-     "enable-padding", app_config.streammux.enable_padding,
-     "batched-push-timeout", app_config.streammux.batched_push_timeout,
-     "width", app_config.streammux.width, "height", app_config.streammux.height, 
-     "live-source", 1,
-     NULL);
-  g_object_set(G_OBJECT(nvinfer), "config-file-path", app_config.infer.config_file, "qos", (gint)app_config.infer.qos, NULL);
-  if (nvinfer2) {
-    g_object_set(G_OBJECT(nvinfer2), "config-file-path", app_config.infer2.config_file, "qos", (gint)app_config.infer2.qos, NULL);
-  }
-  g_object_set(G_OBJECT(nvtracker), "tracker-width", app_config.tracker.width, "tracker-height", app_config.tracker.height,
-      "ll-lib-file", app_config.tracker.ll_lib_file,
-      "ll-config-file", app_config.tracker.ll_config_file,
-      "gpu-id", app_config.gpu_id, 
-      "display-tracking-id", (gint)app_config.tracker.display_tracking_id, 
-      NULL);
-
-  // if (g_strrstr(SOURCE, "file://")) {
-  //   g_object_set(G_OBJECT(nvstreammux), "live-source", 0, NULL);
-  // }
-  // Check if all sources are file-based (non-live)
-  gboolean all_file_sources = TRUE;
-  for (guint i = 0; i < app_config.source.count; i++) {
-    if (!g_strrstr(app_config.source.uris[i], "file://")) {
-      all_file_sources = FALSE;
-      break;
-    }
-  }
-  if (all_file_sources) {
-    g_print("All sources are file-based. Setting live-source to 0.\n");
-    g_object_set(G_OBJECT(nvstreammux), "live-source", 0, NULL);
-  }
-
-  if (!app_config.jetson) {
-    g_object_set(G_OBJECT(nvstreammux), "nvbuf-memory-type", NVBUF_MEM_CUDA_DEVICE, "gpu_id", app_config.gpu_id, NULL);
-    if (!app_config.infer.use_triton) {
-      g_object_set(G_OBJECT(nvinfer), "gpu_id", app_config.gpu_id, NULL);
-    }
-    g_object_set(G_OBJECT(nvvidconv), "nvbuf-memory-type", NVBUF_MEM_CUDA_DEVICE, "gpu_id", app_config.gpu_id, NULL);
-  }
-
-  //==============================================
-  // Link the elements together
-  // Pipeline: nvstreammux -> nvinfer -> [nvinfer2 (Triton)] -> nvtracker -> nvvidconv -> capsfilter -> tee
-  if (nvinfer2) {
-    if (!gst_element_link_many(nvstreammux,nvinfer, nvinfer2, nvtracker,
-                               nvvidconv, capsfilter, tee, NULL)) {
-      g_printerr("ERROR - Failed to link pipeline elements (with nvinfer2) to tee\n");
-      return -1;
-    }
-  } else {
-    if (!gst_element_link_many(nvstreammux, nvinfer, nvtracker,
-                               nvvidconv, capsfilter, tee, NULL)) {
-      g_printerr("ERROR - Failed to link pipeline elements to tee\n");
-      return -1;
-    }
-  }
-
-  // Link: tee -> queue_app -> appsink
-  if (!gst_element_link_many(tee, queue_app, appsink, NULL)) {
-    g_printerr("ERROR - Failed to link tee to appsink\n");
-    return -1;
-  }
-
-  // Link display branch (conditional)
- 
-  if (!app_config.display.disabled) {
-     // Link: tee -> queue_display -> nvosd -> nvsink
-    if (!gst_element_link_many(tee, queue_display, nvosd, nvsink, NULL)) {
-      g_printerr("ERROR - Failed to link tee to display sink\n");
-      return -1;
-    }
-  } else {
-    // Tạo fakesink để terminate tee branch khi không có display
-    GstElement *fakesink = gst_element_factory_make("fakesink", "fakesink");
-    if (!fakesink || !gst_bin_add(GST_BIN(pipeline), fakesink)) {
-      g_printerr("ERROR - Failed to create fakesink\n");
-      return -1;
-    }
-    
-    g_object_set(G_OBJECT(fakesink), "async", FALSE, "sync", FALSE, NULL);
-
-    if (!gst_element_link_many(tee, fakesink, NULL)) {
-      g_printerr("ERROR - Failed to link tee to fakesink\n");
-      return -1;
-    }
-  }
-  //==============================================
-
-  GstBus *bus = gst_pipeline_get_bus(GST_PIPELINE(pipeline));
-  guint bus_watch_id = gst_bus_add_watch(bus, bus_call, loop);
-  gst_object_unref(bus);
-
-  // ===============================================
-  // perf measurement and osd sink pad probe
-  NvDsAppPerfStructInt *perf_struct = (NvDsAppPerfStructInt *) g_malloc0(sizeof(NvDsAppPerfStructInt)); 
-  
-  GstPad *perf_pad = NULL;
-  if(!app_config.display.disabled) {
-    GstPad *nvosd_sink_pad = gst_element_get_static_pad(nvosd, "sink");
-    perf_pad = nvosd_sink_pad;
-    if (!nvosd_sink_pad) {
-      g_printerr("ERROR - Failed to get nvosd sink pad\n");
-      return -1;
-    }
-
-    gst_pad_add_probe(nvosd_sink_pad, GST_PAD_PROBE_TYPE_BUFFER,
-                      nvosd_sink_pad_buffer_probe, NULL, NULL);
-    gst_object_unref(nvosd_sink_pad);
-  }else{
-    perf_pad = gst_element_get_static_pad(tee, "sink");
-    if (!perf_pad) {
-      g_printerr("ERROR - Failed to get fakesink sink pad\n");
-      return -1;
-    }
-  }
-  
-  enable_perf_measurement(perf_struct, perf_pad, app_config.source.count, app_config.perf_measurement_interval_sec, 0, perf_cb);
-
   // ===============================================
   // Start the pipeline
   GST_INFO("Starting GStreamer pipeline...\n");
-  gst_element_set_state(pipeline, GST_STATE_PAUSED);
+  gst_element_set_state(ap->pipeline, GST_STATE_PAUSED);
 
-  if (gst_element_set_state(pipeline, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
+  if (gst_element_set_state(ap->pipeline, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
     g_printerr("ERROR - Failed to set pipeline to playing\n");
     return -1;
   }
@@ -953,7 +558,7 @@ main(gint argc, char *argv[])
   g_main_loop_run(loop);
   g_print("\nPipeline stopped, performing cleanup...\n");
 
-  gst_element_set_state(pipeline, GST_STATE_NULL);
+  gst_element_set_state(ap->pipeline, GST_STATE_NULL);
 
   // ===============================================
   // Print final pipeline metrics report
@@ -967,11 +572,8 @@ main(gint argc, char *argv[])
   // Cleanup detection manager
   cleanup_detection_manager();
 
-  g_free(perf_struct);
-
   config_free();
-  gst_object_unref(GST_OBJECT(pipeline));
-  g_source_remove(bus_watch_id);
+  destroy_app_pipeline(ap);
   g_main_loop_unref(loop);
 
   return 0;
