@@ -153,7 +153,7 @@ class ImageProcessor:
     ) -> Optional[np.ndarray]:
         """Align face using eye landmarks."""
         if len(landmarks) < 2:
-            logger.warning("Face alignment requires at least 2 landmarks")
+            logger.warning("⚠️ Face alignment requires at least 2 landmarks")
             return None
         
         bbox_left = bbox['left']
@@ -170,7 +170,7 @@ class ImageProcessor:
         current_eye_distance = math.sqrt(dx * dx + dy * dy)
         
         if current_eye_distance == 0:
-            logger.warning("Invalid eye distance for alignment")
+            logger.warning("⚠️ Invalid eye distance for alignment")
             return None
         
         scale = desired_eye_distance / current_eye_distance
@@ -273,18 +273,19 @@ class FaceStorage:
         frame_path = detection.get('frame_image_path')
         
         if not frame_path:
+            logger.warning("⚠️ No frame image path provided for cropping face")
             return None
         if not bbox:
-            logger.warning("No bbox provided for cropping face from frame")
+            logger.warning("⚠️ No bbox provided for cropping face from frame")
             return None
 
         frame_path_abs = frame_path if os.path.isabs(frame_path) else os.path.join(self.config.frames_output_dir, frame_path)
         if not os.path.exists(frame_path_abs):
-            logger.warning(f"Frame image not found: {frame_path_abs}")
+            logger.warning(f"⚠️ Frame image not found: {frame_path_abs}")
             return None
         frame_img = cv2.imread(frame_path_abs)
         if frame_img is None:
-            logger.warning(f"Failed to read frame image: {frame_path_abs}")
+            logger.warning(f"⚠️ Failed to read frame image: {frame_path_abs}")
             return None
         left = int(bbox['left'])
         top = int(bbox['top'])
@@ -297,13 +298,13 @@ class FaceStorage:
         right = min(w, left + width)
         bottom = min(h, top + height)
         if right <= left or bottom <= top:
-            logger.warning(f"Invalid bbox for cropping: {bbox}")
+            logger.warning(f"⚠️ Invalid bbox for cropping: {bbox}")
             return None
         face_crop = frame_img[top:bottom, left:right]
         # Encode as JPEG
         ret, buf = cv2.imencode('.jpg', face_crop)
         if not ret:
-            logger.warning("Failed to encode cropped face image")
+            logger.warning("⚠️ Failed to encode cropped face image")
             return None
         return buf.tobytes()
 
@@ -321,7 +322,9 @@ class FaceStorage:
                 bbox = detection.get(box_key)
                 image_data = self._crop_face_from_frame(detection, bbox )
                 if image_data is None:
+                    logger.warning("⚠️ Failed to crop face image from frame, skipping save")
                     return None
+                logger.info("✅ Cropped face image from frame for saving")
                 # set the cropped image back to detection for further processing
                 detection['face_image'] = base64.b64encode(image_data).decode('utf-8')
                 detection['crop_bbox'] = detection.get(box_key)
@@ -402,7 +405,7 @@ class FaceStorage:
             cv2.imwrite(filepath, aligned_with_landmarks)
             return filepath
         except Exception as e:
-            logger.warning(f"Failed to save aligned landmarks: {e}")
+            logger.warning(f"⚠️ Failed to save aligned landmarks: {e}")
             return None
     
     
@@ -420,12 +423,12 @@ class FaceStorage:
             else os.path.join(self.config.frames_output_dir, frame_path)
         )
         if not os.path.exists(frame_path_abs):
-            logger.warning(f"Frame image not found for annotation: {frame_path_abs}")
+            logger.warning(f"⚠️ Frame image not found for annotation: {frame_path_abs}")
             return None
 
         frame_img = cv2.imread(frame_path_abs)
         if frame_img is None:
-            logger.warning(f"Failed to read frame image: {frame_path_abs}")
+            logger.warning(f"⚠️ Failed to read frame image: {frame_path_abs}")
             return None
 
         annotated = self.image_processor.draw_detection_on_frame(frame_img, detection)
@@ -693,7 +696,7 @@ class FaceDetectionConsumer:
                 try:
                     os.remove(os.path.join(self.config.faces_output_dir, f))
                 except Exception as e:
-                    logger.warning(f"Failed to remove {f}: {e}")
+                    logger.warning(f"⚠️ Failed to remove {f}: {e}")
     
     def start(self) -> None:
         """Start consuming messages."""
