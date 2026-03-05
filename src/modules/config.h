@@ -105,6 +105,7 @@ typedef struct {
   gboolean enabled;
   gchar   *dir;
   guint    quality;  /**< JPEG quality 0–100 */
+  gboolean exclude_letterbox; /**< if TRUE, crop out letterbox padding before saving */
 } AppFrameSaveConfig;
 
 /** Per-frame JSON output */

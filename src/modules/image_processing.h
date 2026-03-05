@@ -5,6 +5,7 @@
 #include "nvbufsurface.h"
 #include "gstnvdsmeta.h"
 #include "face.h"
+#include "utils.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -26,7 +27,8 @@ gboolean ensure_frame_save_directory(const gchar *dir_path);
  * Save frame to JPEG file and return relative path
  */
 gchar *save_frame_to_jpeg(NvBufSurface *surface, NvDsFrameMeta *frame_meta,
-                          const gchar *base_output_dir, gint quality);
+                          const gchar *base_output_dir, gint quality, 
+                          gboolean exclude_letterbox, LetterboxGeometry *lb_geom);
 
 #ifdef __cplusplus
 }

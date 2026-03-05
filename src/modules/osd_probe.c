@@ -2,6 +2,7 @@
 #include "config.h"
 #include "nvbufsurface.h"
 #include <time.h>
+#include "utils.h"
 
 GST_DEBUG_CATEGORY_EXTERN(deepstream_debug_category);
 #define GST_CAT_DEFAULT deepstream_debug_category
@@ -195,14 +196,24 @@ nvosd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_da
     NvDsFrameMeta *frame_meta = (NvDsFrameMeta *) (l_frame->data);
     int mux_w = surface->surfaceList[frame_meta->batch_id].width; // = streammux width
     int mux_h = surface->surfaceList[frame_meta->batch_id].height;  // = streammux height
-    GST_DEBUG ("stream %d==%d, source [%d X %d], streammux size [%d X %d]\n",
+    LetterboxGeometry lb_geom = compute_letterbox_geometry(mux_w, mux_h, 
+        frame_meta->source_frame_width, frame_meta->source_frame_height);
+    
+    GST_DEBUG ("stream %d==%d, source [%d X %d], streammux size [%d X %d], letterbox [%d X %d], pad [%d, %d], scale %.2f\n",
             frame_meta->source_id,
             frame_meta->pad_index,
             frame_meta->source_frame_width,
             frame_meta->source_frame_height,
             mux_w, 
-            mux_h
+            mux_h,
+            lb_geom.content_w,
+            lb_geom.content_h,
+            lb_geom.pad_x,
+            lb_geom.pad_y,
+            lb_geom.scale
           );
+    //  stream 0==0, source [1280 X 720], streammux size [640 X 640], letterbox [640 X 360], pad [0, 140], scale 0.50
+
     // Add NTP timestamp overlay (once per frame)
     add_ntp_timestamp_overlay(batch_meta, frame_meta);
 

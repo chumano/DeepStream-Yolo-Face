@@ -91,7 +91,8 @@ encode_crop_to_base64_jpeg(NvBufSurface *surface, CropBox *crop_box, gint qualit
 
 gchar *
 save_frame_to_jpeg(NvBufSurface *surface, NvDsFrameMeta *frame_meta,
-                   const gchar *base_output_dir, gint quality)
+                   const gchar *base_output_dir, gint quality,
+                  gboolean exclude_letterbox, LetterboxGeometry *lb_geom )
 {
   if (!surface || !frame_meta || !base_output_dir) {
     GST_ERROR("Invalid parameters for save_frame_to_jpeg");
@@ -109,12 +110,13 @@ save_frame_to_jpeg(NvBufSurface *surface, NvDsFrameMeta *frame_meta,
                                 &relative_path, &absolute_path))
     return NULL;
 
-  
   // Create RGBA surface
   NvBufSurfaceParams *src_params = &surface->surfaceList[batch_id];
-  NvBufSurface *dst_surface = create_rgba_surface(surface->gpuId,
-                                                   src_params->width,
-                                                   src_params->height);
+  
+  guint width = exclude_letterbox ? lb_geom->content_w : src_params->width;
+  guint height = exclude_letterbox ? lb_geom->content_h : src_params->height;
+
+  NvBufSurface *dst_surface = create_rgba_surface(surface->gpuId, width, height);
   if (!dst_surface) {
     g_free(relative_path);
     g_free(absolute_path);
@@ -123,8 +125,19 @@ save_frame_to_jpeg(NvBufSurface *surface, NvDsFrameMeta *frame_meta,
 
 
   // Set up transform parameters to copy the entire source surface to the destination RGBA surface
+  NvBufSurfTransformRect src_rect = { 
+    exclude_letterbox ? lb_geom->pad_y : 0,
+    exclude_letterbox ? lb_geom->pad_x : 0, 
+    exclude_letterbox ? lb_geom->content_w : src_params->width, 
+    exclude_letterbox ? lb_geom->content_h : src_params->height };
+  NvBufSurfTransformRect dst_rect = { 0, 0, width, height }; 
+
   NvBufSurfTransformParams transform_params = {0};
-  transform_params.transform_flag = NVBUFSURF_TRANSFORM_FILTER;
+  transform_params.src_rect = &src_rect;
+  transform_params.dst_rect = &dst_rect;
+  transform_params.transform_flag = NVBUFSURF_TRANSFORM_CROP_SRC |
+                    NVBUFSURF_TRANSFORM_CROP_DST |
+                    NVBUFSURF_TRANSFORM_FILTER;
   transform_params.transform_filter = NvBufSurfTransformInter_Default;
 
   NvBufSurfTransform_Error err = transform_batch_slot(surface, dst_surface, batch_id, &transform_params);
@@ -141,10 +154,8 @@ save_frame_to_jpeg(NvBufSurface *surface, NvDsFrameMeta *frame_meta,
   //=================================================
   // Copy transformed surface data to CPU and encode to JPEG
   NvBufSurfaceParams *dst_params = &dst_surface->surfaceList[0];
-  guint width = dst_params->width;
-  guint height = dst_params->height;
   guint pitch = dst_params->pitch;
-  GST_DEBUG("Transformed surface: width=%u, height=%u, pitch=%u\n", width, height, pitch);
+  GST_INFO("Transformed surface: width=%u, height=%u, pitch=%u\n", width, height, pitch);
 
   // =================================================
   guchar *cpu_buffer = copy_surface_to_cpu(dst_params);

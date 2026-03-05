@@ -10,6 +10,8 @@
 #include "modules/json_builder.h"
 #include "modules/osd_probe.h"
 #include "modules/pipeline_builder.h"
+#include "modules/utils.h"
+
 // GST_DEBUG_CATEGORY_STATIC to GST_DEBUG_CATEGORY  
 //which makes the symbol externally visible so that osd_probe.c
 GST_DEBUG_CATEGORY(deepstream_debug_category);
@@ -64,7 +66,7 @@ calculate_crop_box(NvDsObjectMeta *obj_meta, CropBox *crop_box,
  */
 static gchar *
 process_object(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta, NvBufSurface *surface,
-    gchar* frame_image_path)
+    gchar* frame_image_path, LetterboxGeometry *lb_geom)
 {
   gdouble frame_timestamp = 0.0;
   if (frame_meta && frame_meta->ntp_timestamp) {
@@ -77,13 +79,7 @@ process_object(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta, NvBufSurface
   guint frame_width = surface->surfaceList[frame_meta->batch_id].width; // = streammux width
   guint frame_height = surface->surfaceList[frame_meta->batch_id].height; // = streammux height
 
-  // Bbox
-  CropBox bbox = {
-    .left = (guint) obj_meta->rect_params.left,
-    .top = (guint) obj_meta->rect_params.top,
-    .width = (guint) obj_meta->rect_params.width,
-    .height = (guint) obj_meta->rect_params.height
-  };
+
 
   // Extract landmarks from object metadata
   guint num_landmarks = 0;
@@ -116,6 +112,32 @@ process_object(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta, NvBufSurface
   gchar *face_image_base64 = NULL;
   if (app_config.enable_crop_image && surface) {
     face_image_base64 = encode_crop_to_base64_jpeg(surface, &crop_box, 85, frame_meta->batch_id);
+  }
+
+  // Bbox
+  CropBox bbox = {
+    .left = (guint) obj_meta->rect_params.left,
+    .top = (guint) obj_meta->rect_params.top,
+    .width = (guint) obj_meta->rect_params.width,
+    .height = (guint) obj_meta->rect_params.height
+  };
+
+  // Adjust coordinates if letterbox is present and we want to exclude letterbox area from saved image
+  if(app_config.frame_save.exclude_letterbox) {
+    // Recalculate Bounding Box Coordinates
+    // Adjust bbox and crop_box coordinates to account for letterbox padding
+    bbox.left -= lb_geom->pad_x;
+    bbox.top -= lb_geom->pad_y;
+
+    crop_box.left -= lb_geom->pad_x;
+    crop_box.top -= lb_geom->pad_y;
+
+    // Adjust landmark coordinates as well
+    for (guint i = 0; i < num_landmarks; i++) {
+      landmarks[i].x -= lb_geom->pad_x;
+      landmarks[i].y -= lb_geom->pad_y;
+    }
+
   }
 
   // Create face context
@@ -303,6 +325,12 @@ appsink_new_sample_callback(GstElement *appsink, gpointer user_data)
   NvDsMetaList *l_frame = NULL;
   for (l_frame = batch_meta->frame_meta_list; l_frame != NULL; l_frame = l_frame->next) {
     NvDsFrameMeta *frame_meta = (NvDsFrameMeta *)(l_frame->data);
+    LetterboxGeometry lb_geom = compute_letterbox_geometry(
+      surface->surfaceList[frame_meta->batch_id].width,
+      surface->surfaceList[frame_meta->batch_id].height,
+      frame_meta->source_frame_width,
+      frame_meta->source_frame_height
+    );
 
     // === Record pipeline metrics (detection count, latency) ===
     // Record frame-level metrics and latency
@@ -347,7 +375,9 @@ appsink_new_sample_callback(GstElement *appsink, gpointer user_data)
       if (  frame_meta->obj_meta_list != NULL 
         && frame_meta->num_obj_meta > 0 ) {
         image_rel_path = save_frame_to_jpeg(surface, frame_meta,
-                          app_config.frame_save.dir, app_config.frame_save.quality);
+                          app_config.frame_save.dir, app_config.frame_save.quality,
+                          app_config.frame_save.exclude_letterbox,
+                          &lb_geom);
         GST_DEBUG("Saved frame %d to %s",
                   frame_meta->frame_num,
                   image_rel_path ? image_rel_path : "NULL");
@@ -368,7 +398,8 @@ appsink_new_sample_callback(GstElement *appsink, gpointer user_data)
         obj_json = process_traffic_object(frame_meta, obj_meta, image_rel_path);
       } else {
         // Primary inference (face / infer) — full face pipeline
-        obj_json = process_object(frame_meta, obj_meta, surface, image_rel_path);
+        obj_json = process_object(frame_meta, obj_meta, surface, image_rel_path, 
+                    &lb_geom);
       }
 
       if (obj_json)
