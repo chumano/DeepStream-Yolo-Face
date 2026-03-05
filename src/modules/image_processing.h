@@ -12,12 +12,6 @@ extern "C" {
 
 
 /**
- * Calculate crop box with padding around bounding box
- */
-void calculate_crop_box(NvDsObjectMeta *obj_meta, CropBox *crop_box, 
-                        guint frame_width, guint frame_height);
-
-/**
  * Encode cropped region to base64 JPEG
  */
 gchar *encode_crop_to_base64_jpeg(NvBufSurface *surface, CropBox *crop_box, 

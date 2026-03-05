@@ -180,28 +180,6 @@ save_frame_to_jpeg(NvBufSurface *surface, NvDsFrameMeta *frame_meta,
 }
 
 
-void
-calculate_crop_box(NvDsObjectMeta *obj_meta, CropBox *crop_box, 
-  guint frame_width, guint frame_height)
-{
-  // Add 20% padding around the bounding box
-  gfloat padding = 0.2f;
-  
-  gfloat pad_w = obj_meta->rect_params.width * padding;
-  gfloat pad_h = obj_meta->rect_params.height * padding;
-  
-  gint left = (gint)(obj_meta->rect_params.left - pad_w);
-  gint top = (gint)(obj_meta->rect_params.top - pad_h);
-  gint right = (gint)(obj_meta->rect_params.left + obj_meta->rect_params.width + pad_w);
-  gint bottom = (gint)(obj_meta->rect_params.top + obj_meta->rect_params.height + pad_h);
-  
-  // Clamp to frame boundaries
-  crop_box->left = MAX(0, left);
-  crop_box->top = MAX(0, top);
-  crop_box->width = MIN(right, (gint)frame_width) - crop_box->left;
-  crop_box->height = MIN(bottom, (gint)frame_height) - crop_box->top;
-}
-
 //==================================================
 // ── Helper function implementations ──────────────────────────────────────────
 //==================================================
