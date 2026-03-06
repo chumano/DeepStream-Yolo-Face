@@ -1,6 +1,7 @@
 #include "deepstream.h"
 #include <jpeglib.h>
 #include <sys/stat.h>
+#include <string.h>
 
 //  modules
 #include "modules/config.h"
@@ -17,6 +18,12 @@
 GST_DEBUG_CATEGORY(deepstream_debug_category);
 #define GST_CAT_DEFAULT deepstream_debug_category
 
+// Per-source raw frame counter — incremented every time a raw frame arrives
+// from the source tee appsink.  Access is single-threaded per source (each
+// GStreamer pad-probe / appsink callback fires on one thread per source).
+#define MAX_RAW_SOURCES 64
+static guint raw_src_frame_counters[MAX_RAW_SOURCES] = {0};
+
 // =============================================================================
 // Utility Functions
 // =============================================================================
@@ -27,6 +34,128 @@ get_current_time(void)
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return (gdouble) ts.tv_sec + (gdouble) ts.tv_nsec / 1000000000.0;
+}
+
+// =============================================================================
+// Raw source appsink callback (per-source, fires BEFORE nvstreammux)
+// =============================================================================
+
+/**
+ * Called for every decoded-and-converted RGBA frame on the per-source tee
+ * branch (before nvstreammux, so frames are at original source resolution
+ * with no letterbox and no OSD overlays).
+ *
+ * @user_data  source index passed as GUINT_TO_POINTER(source_id)
+ *
+ * Behaviour depends on the configured frame-save mode:
+ *   save_all_frames  → encode + write JPEG to disk immediately.
+ *   otherwise        → encode + push into the per-source FrameBuffer ring;
+ *                      the inference appsink flushes the ring to disk on
+ *                      detection (frame_buffer_flush_to_disk).
+ */
+static GstFlowReturn
+raw_src_appsink_callback(GstElement *appsink, gpointer user_data)
+{
+  guint source_id = GPOINTER_TO_UINT(user_data);
+
+  if (!app_config.frame_save.enabled || !app_config.frame_save.dir)
+    return GST_FLOW_OK;
+
+  GstSample *sample = NULL;
+  g_signal_emit_by_name(appsink, "pull-sample", &sample);
+  if (!sample) {
+    GST_ERROR("[raw-tee] Failed to pull sample (src=%u)", source_id);
+    return GST_FLOW_ERROR;
+  }
+
+  GstBuffer *buf = gst_sample_get_buffer(sample);
+  if (!buf) {
+    gst_sample_unref(sample);
+    return GST_FLOW_ERROR;
+  }
+
+  GstMapInfo map_info;
+  if (!gst_buffer_map(buf, &map_info, GST_MAP_READ)) {
+    gst_sample_unref(sample);
+    return GST_FLOW_ERROR;
+  }
+
+  NvBufSurface *surface = (NvBufSurface *)map_info.data;
+  if (!surface || surface->numFilled == 0 || !surface->surfaceList) {
+    gst_buffer_unmap(buf, &map_info);
+    gst_sample_unref(sample);
+    return GST_FLOW_OK;
+  }
+
+  /* Buffer PTS as stream timestamp (ns → seconds); fall back to wall clock */
+  GstClockTime pts = GST_BUFFER_PTS(buf);
+  GstClockTime dts = GST_BUFFER_DTS(buf);
+
+  // get ntp_timestamp from buffer metadata if available (ns → seconds) : available on gststreamer version 1.22+
+  GstReferenceTimestampMeta *meta = (GstReferenceTimestampMeta *)gst_buffer_get_meta(buf, gst_reference_timestamp_meta_api_get_type());
+
+  GstClockTime ntp = (meta) ? meta->timestamp : GST_CLOCK_TIME_NONE;
+
+  g_print("[raw-tee] src=%u frame=%u PTS=%" GST_TIME_FORMAT " DTS=%" GST_TIME_FORMAT " NTP=%" GST_TIME_FORMAT "\n",
+          source_id, raw_src_frame_counters[source_id] + 1, 
+          GST_TIME_ARGS(pts), 
+          GST_TIME_ARGS(dts),
+          GST_TIME_ARGS(ntp));
+
+
+  gdouble timestamp = (pts != GST_CLOCK_TIME_NONE)
+                      ? (gdouble)pts / 1e9
+                      : get_current_time();
+
+  /* Per-source monotonic frame counter */
+  guint frame_num = 0;
+  if (source_id < MAX_RAW_SOURCES)
+    frame_num = ++raw_src_frame_counters[source_id];
+
+  /*
+   * The raw surface is NOT batched (single frame, batch_id = 0).
+   * No letterbox exists here — save the full frame.
+   */
+  NvDsFrameMeta fm_local = {};
+  fm_local.batch_id  = 0;
+  fm_local.source_id = source_id;
+  fm_local.frame_num = frame_num;
+
+  /* Letterbox geometry with no padding (full source resolution) */
+  LetterboxGeometry lb_noop = {};
+  lb_noop.content_w = surface->surfaceList[0].width;
+  lb_noop.content_h = surface->surfaceList[0].height;
+  lb_noop.scale     = 1.0f;
+
+  if (app_config.frame_save.save_all_frames) {
+    /* ── Mode 1: save every raw frame directly to disk ── */
+    gchar *rel = save_frame_to_jpeg(surface, &fm_local,
+                                    app_config.frame_save.dir,
+                                    app_config.frame_save.quality,
+                                    FALSE, &lb_noop);
+    GST_DEBUG("[raw-tee/save-all] src=%u frame=%u -> %s",
+              source_id, frame_num, rel ? rel : "NULL");
+    g_free(rel);
+
+  } else if (frame_buffer) {
+    /* ── Mode 2 / smart: push into ring buffer; flush on detection ── */
+    guchar *jpeg_data = NULL;
+    gsize   jpeg_size = 0;
+    if (save_frame_to_jpeg_mem(surface, &fm_local,
+                               app_config.frame_save.quality,
+                               FALSE, &lb_noop,
+                               &jpeg_data, &jpeg_size)) {
+      frame_buffer_push(frame_buffer, source_id, frame_num,
+                        timestamp, jpeg_data, jpeg_size);
+      frame_buffer_prune(frame_buffer, source_id, timestamp);
+      GST_TRACE("[raw-tee/buf] src=%u frame=%u ts=%.3f",
+                source_id, frame_num, timestamp);
+    }
+  }
+
+  gst_buffer_unmap(buf, &map_info);
+  gst_sample_unref(sample);
+  return GST_FLOW_OK;
 }
 
 // =============================================================================
@@ -384,6 +513,20 @@ appsink_new_sample_callback(GstElement *appsink, gpointer user_data)
       }
       //}
     }
+
+    // Raw frames are captured in raw_src_appsink_callback from the per-source
+    // tee branch before nvstreammux (original resolution, no letterbox, no OSD).
+    // For pre-buffer and smart modes, flush the ring buffer on detection.
+    if (app_config.frame_save.enabled
+        && !app_config.frame_save.save_all_frames
+        && frame_buffer
+        && frame_meta->obj_meta_list != NULL
+        && frame_meta->num_obj_meta > 0) {
+      // trigger save frame
+      frame_buffer_flush_to_disk(frame_buffer, frame_meta->source_id); //frame_meta->frame_num
+      GST_DEBUG("[raw-tee] Detection on src=%u frame=%u: flushed pre-buffer",
+                frame_meta->source_id, frame_meta->frame_num);
+    }
     
     // Process each object in frame
     GPtrArray *obj_jsons = g_ptr_array_new_with_free_func(g_free);
@@ -589,6 +732,22 @@ main(gint argc, char *argv[])
   GST_INFO("Initializing detection manager...");
   init_detection_manager();
 
+  // ============================================================================
+  // Initialize raw-frame ring buffer (used for pre-buffer and smart-save modes)
+  // Not needed when save_all_frames is true because every frame is written
+  // directly to disk by raw_src_appsink_callback.
+  if (app_config.frame_save.enabled 
+      && !app_config.frame_save.save_all_frames) {
+    GST_INFO("Initializing raw-frame ring buffer (%.2fs window, %u source(s))...",
+             app_config.frame_save.pre_buffer_duration_sec, app_config.source.count);
+    frame_buffer = frame_buffer_new(app_config.source.count,
+                                    app_config.frame_save.pre_buffer_duration_sec,
+                                    app_config.frame_save.dir);
+    if (!frame_buffer) {
+      g_printerr("WARNING - Failed to create frame buffer, buffered saving disabled\n");
+    }
+  }
+
   GMainLoop *loop = g_main_loop_new(NULL, FALSE);
 
   _intr_setup();
@@ -609,6 +768,19 @@ main(gint argc, char *argv[])
   if (!ap) {
     g_printerr("ERROR - Failed to create pipeline\n");
     return -1;
+  }
+
+  // ============================================================================
+  // Connect per-source raw appsink callbacks (tee branch before nvstreammux)
+  if (app_config.frame_save.enabled && ap->src_appsinks) {
+    for (guint i = 0; i < ap->num_sources; i++) {
+      if (ap->src_appsinks[i]) {
+        g_signal_connect(ap->src_appsinks[i], "new-sample",
+                         G_CALLBACK(raw_src_appsink_callback),
+                         GUINT_TO_POINTER(i));
+        GST_INFO("Connected raw appsink for source %u", i);
+      }
+    }
   }
 
   // ===============================================
@@ -640,6 +812,13 @@ main(gint argc, char *argv[])
   // ===============================================
   // Cleanup detection manager
   cleanup_detection_manager();
+
+  // ===============================================
+  // Cleanup pre-detection frame buffer
+  if (frame_buffer) {
+    frame_buffer_free(frame_buffer);
+    frame_buffer = NULL;
+  }
 
   config_free();
   destroy_app_pipeline(ap);

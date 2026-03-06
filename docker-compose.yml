@@ -1,4 +1,15 @@
 services:
+  gststreamer:
+    build:
+      context: gstreammer
+      dockerfile: Dockerfile
+      target: ubuntu22 # ubuntu22 or ubuntu24
+    image: gststreamer:latest
+    container_name: gststreamer
+    command: ["tail", "-f", "/dev/null"]  # Keep container running for testing
+    volumes:
+      - ./src:/app/src:rw
+      - ./tests:/app/tests:rw
 
   deepstream-yolo-face:
     build:

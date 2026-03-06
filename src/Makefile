@@ -83,6 +83,14 @@ run: clean_images $(APP)
 	GST_DEBUG=$(LOG_APP):$(LOG) ./$(APP) --config /app/configs/app.ini \
 	-s file:///app/videos/faces_tracking.mp4
 
+run_rtsp: clean_images $(APP)
+	GST_DEBUG=$(LOG_APP):$(LOG) ./$(APP) --config /app/configs/app.ini \
+	-s rtsp://100.64.0.153:8554/test
+
+run_rtsp_debug: clean_images $(APP)
+	GST_DEBUG=$(LOG_APP):$(LOG) gdb --args ./$(APP) --config /app/configs/app.ini \
+	-s rtsp://100.64.0.153:8554/test
+
 run_2infer: clean_images $(APP)
 	GST_DEBUG=$(LOG_APP):$(LOG) ./$(APP) --config /app/configs/app2.ini \
 	-s file:///app/videos/myface.mp4

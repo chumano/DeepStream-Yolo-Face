@@ -14,6 +14,7 @@
 #include "modules/interrupt.h"
 #include "modules/perf.h"
 #include "modules/pipeline_monitor.h"
+#include "modules/frame_buffer.h"
 #include "detection_manager.h"
 
 
@@ -22,5 +23,8 @@ static DetectionManager *detection_manager = NULL;
 
 // Global pipeline monitor instance
 static PipelineMonitor *pipeline_monitor = NULL;
+
+// Global pre-detection frame buffer instance (NULL when disabled)
+static FrameBuffer *frame_buffer = NULL;
 
 #endif

@@ -113,10 +113,12 @@ AppConfig app_config = {
 
   /* Frame save */
   .frame_save = {
-    .enabled = TRUE,
-    .dir     = NULL,
-    .quality = 70,
-    .exclude_letterbox = TRUE,
+    .enabled                = TRUE,
+    .dir                    = NULL,
+    .quality                = 70,
+    .exclude_letterbox      = TRUE,
+    .save_all_frames        = FALSE,
+    .pre_buffer_duration_sec = 1.0,
   },
 
   /* JSON save */
@@ -254,10 +256,12 @@ parse_config_file(const gchar *config_file, GError **error)
   GET_INT("osd_text", "ntp-text-font-size", app_config.osd_text.ntp_text_font_size);
 
   /* ── [frame_save] ────────────────────────────────────────── */
-  GET_BOOL("frame_save", "enabled", app_config.frame_save.enabled);
-  GET_STR ("frame_save", "dir",     app_config.frame_save.dir);
-  GET_INT ("frame_save", "quality", app_config.frame_save.quality);
-  GET_BOOL("frame_save", "exclude-letterbox", app_config.frame_save.exclude_letterbox);
+  GET_BOOL("frame_save", "enabled",            app_config.frame_save.enabled);
+  GET_STR ("frame_save", "dir",                app_config.frame_save.dir);
+  GET_INT ("frame_save", "quality",            app_config.frame_save.quality);
+  GET_BOOL("frame_save", "exclude-letterbox",  app_config.frame_save.exclude_letterbox);
+  GET_BOOL("frame_save", "save-all-frames",    app_config.frame_save.save_all_frames);
+  GET_DBL ("frame_save", "pre-buffer-duration",app_config.frame_save.pre_buffer_duration_sec);
 
   /* ── [json_save] ─────────────────────────────────────────── */
   GET_BOOL("json_save", "enabled", app_config.json_save.enabled);
@@ -330,12 +334,16 @@ static GOptionEntry entries[] = {
    "Disable face crop image in Kafka JSON",              NULL},
 
   /* Frame save */
-  {"enable-frame-save",  0, 0, G_OPTION_ARG_NONE,   &app_config.frame_save.enabled,
+  {"enable-frame-save",     0, 0, G_OPTION_ARG_NONE,   &app_config.frame_save.enabled,
    "Enable saving frames to disk",                       NULL},
-  {"frame-save-dir",     0, 0, G_OPTION_ARG_STRING, &_opt_frame_save_dir,
+  {"frame-save-dir",        0, 0, G_OPTION_ARG_STRING, &_opt_frame_save_dir,
    "Directory to save frames",                           NULL},
-  {"frame-save-quality", 0, 0, G_OPTION_ARG_INT,    &app_config.frame_save.quality,
+  {"frame-save-quality",    0, 0, G_OPTION_ARG_INT,    &app_config.frame_save.quality,
    "JPEG quality 0-100 (default 70)",                    NULL},
+  {"save-all-frames",       0, 0, G_OPTION_ARG_NONE,   &app_config.frame_save.save_all_frames,
+   "Save every frame (not just when face detected)",     NULL},
+  {"pre-buffer-duration",   0, 0, G_OPTION_ARG_DOUBLE, &app_config.frame_save.pre_buffer_duration_sec,
+   "Pre-detection buffer duration in seconds (default 1.0)", NULL},
 
   {NULL}
 };
@@ -552,11 +560,14 @@ static void print_app_config(void) {
     app_config.osd_text.ntp_text_x_offset,
     app_config.osd_text.ntp_text_y_offset,
     app_config.osd_text.ntp_text_font_size);
-  g_print("\n  frame_save: enabled=%s dir=%s quality=%u exclude_letterbox=%s",
+  g_print("\n  frame_save: enabled=%s dir=%s quality=%u exclude_letterbox=%s"
+          " save_all_frames=%s pre_buffer_duration=%.2f",
     app_config.frame_save.enabled ? "TRUE" : "FALSE",
     app_config.frame_save.dir ? app_config.frame_save.dir : "(none)",
     app_config.frame_save.quality,
-    app_config.frame_save.exclude_letterbox ? "TRUE" : "FALSE");
+    app_config.frame_save.exclude_letterbox ? "TRUE" : "FALSE",
+    app_config.frame_save.save_all_frames   ? "TRUE" : "FALSE",
+    app_config.frame_save.pre_buffer_duration_sec);
   g_print("\n  json_save: enabled=%s dir=%s\n==========================\n\n",
     app_config.json_save.enabled ? "TRUE" : "FALSE",
     app_config.json_save.dir ? app_config.json_save.dir : "(none)");

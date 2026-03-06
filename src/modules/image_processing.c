@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string.h>
 #include "image_processing.h"
 #include <jpeglib.h>
 #include <setjmp.h>
@@ -155,7 +156,7 @@ save_frame_to_jpeg(NvBufSurface *surface, NvDsFrameMeta *frame_meta,
   // Copy transformed surface data to CPU and encode to JPEG
   NvBufSurfaceParams *dst_params = &dst_surface->surfaceList[0];
   guint pitch = dst_params->pitch;
-  GST_INFO("Transformed surface: width=%u, height=%u, pitch=%u\n", width, height, pitch);
+  GST_DEBUG("Transformed surface: width=%u, height=%u, pitch=%u\n", width, height, pitch);
 
   // =================================================
   guchar *cpu_buffer = copy_surface_to_cpu(dst_params);
@@ -188,6 +189,92 @@ save_frame_to_jpeg(NvBufSurface *surface, NvDsFrameMeta *frame_meta,
     return NULL;
   }
   return relative_path;
+}
+
+gboolean
+save_frame_to_jpeg_mem(NvBufSurface *surface, NvDsFrameMeta *frame_meta,
+                       gint quality, gboolean exclude_letterbox,
+                       LetterboxGeometry *lb_geom,
+                       guchar **out_data, gsize *out_size)
+{
+  if (!surface || !frame_meta || !out_data || !out_size) {
+    GST_ERROR("Invalid parameters for save_frame_to_jpeg_mem");
+    return FALSE;
+  }
+
+  *out_data = NULL;
+  *out_size = 0;
+
+  guint batch_id = frame_meta->batch_id;
+  if (!validate_surface(surface, batch_id))
+    return FALSE;
+
+  NvBufSurfaceParams *src_params = &surface->surfaceList[batch_id];
+
+  guint width  = exclude_letterbox ? lb_geom->content_w : src_params->width;
+  guint height = exclude_letterbox ? lb_geom->content_h : src_params->height;
+
+  NvBufSurface *dst_surface = create_rgba_surface(surface->gpuId, width, height);
+  if (!dst_surface)
+    return FALSE;
+
+  NvBufSurfTransformRect src_rect = {
+    exclude_letterbox ? lb_geom->pad_y : 0,
+    exclude_letterbox ? lb_geom->pad_x : 0,
+    exclude_letterbox ? lb_geom->content_w : src_params->width,
+    exclude_letterbox ? lb_geom->content_h : src_params->height };
+  NvBufSurfTransformRect dst_rect = { 0, 0, width, height };
+
+  NvBufSurfTransformParams transform_params = {0};
+  transform_params.src_rect = &src_rect;
+  transform_params.dst_rect = &dst_rect;
+  transform_params.transform_flag = NVBUFSURF_TRANSFORM_CROP_SRC |
+                                    NVBUFSURF_TRANSFORM_CROP_DST |
+                                    NVBUFSURF_TRANSFORM_FILTER;
+  transform_params.transform_filter = NvBufSurfTransformInter_Default;
+
+  NvBufSurfTransform_Error err = transform_batch_slot(surface, dst_surface, batch_id, &transform_params);
+  if (err != NvBufSurfTransformError_Success) {
+    GST_ERROR("Surface transform failed for batch_id=%u, error=%d", batch_id, err);
+    NvBufSurfaceDestroy(dst_surface);
+    return FALSE;
+  }
+
+  cudaStreamSynchronize(0);
+
+  NvBufSurfaceParams *dst_params = &dst_surface->surfaceList[0];
+  guint pitch = dst_params->pitch;
+
+  guchar *cpu_buffer = copy_surface_to_cpu(dst_params);
+  NvBufSurfaceDestroy(dst_surface);
+  if (!cpu_buffer)
+    return FALSE;
+
+  guchar *rgb_data = rgba_to_rgb(cpu_buffer, width, height, pitch);
+  g_free(cpu_buffer);
+  if (!rgb_data)
+    return FALSE;
+
+  unsigned char *jpeg_buf  = NULL;
+  unsigned long  jpeg_size = 0;
+  encode_rgb_to_jpeg_mem(rgb_data, width, height, quality, &jpeg_buf, &jpeg_size);
+  g_free(rgb_data);
+
+  if (!jpeg_buf || jpeg_size == 0) {
+    GST_ERROR("JPEG encoding to memory failed");
+    free(jpeg_buf);
+    return FALSE;
+  }
+
+  /* Copy libjpeg-allocated buffer into a GLib-owned buffer */
+  guchar *glib_buf = (guchar *)g_malloc(jpeg_size);
+  memcpy(glib_buf, jpeg_buf, jpeg_size);
+  free(jpeg_buf);
+
+  *out_data = glib_buf;
+  *out_size = (gsize)jpeg_size;
+
+  return TRUE;
 }
 
 

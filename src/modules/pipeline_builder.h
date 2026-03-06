@@ -45,6 +45,33 @@ typedef struct {
   /* Performance measurement resources */
   NvDsAppPerfStructInt *perf_struct;
   GstPad               *perf_pad; /**< pad used by enable_perf_measurement() */
+
+  /**
+   * Per-source raw frame capture branch.
+   *
+   * When app_config.frame_save.enabled is TRUE, each source's decoded video
+   * is routed through a tee *before* nvstreammux so that original-resolution
+   * frames (without letterbox or OSD overlays) can be captured.
+   *
+   * Topology per source N:
+   *   [uridecodebin] ─► src_tees[N] ─src_0─► nvstreammux  (inference path)
+   *                                  └─src_1─► src_nvvidconvs[N]
+   *                                            ─► src_capsfilters[N] (RGBA)
+   *                                            ─► src_queues[N]
+   *                                            ─► src_appsinks[N]
+   *
+   * All arrays have length num_sources.  When frame saving is disabled every
+   * entry is NULL and the tee is omitted (direct uridecodebin→nvstreammux link).
+   */
+  guint       num_sources;
+  GstElement **src_tees;        /**< per-source tee; NULL entries when disabled */
+  GstElement **src_nvvidconvs;  /**< per-source nvvideoconvert → RGBA */
+  GstElement **src_capsfilters; /**< per-source capsfilter (RGBA NVMM) */
+  GstElement **src_queues;      /**< per-source leaky queue */
+  GstElement **src_appsinks;    /**< per-source raw-frame appsink */
+
+  /** @private Internal list of heap-allocated SourceBinCtx objects */
+  GList *_src_ctxs;
 } AppPipeline;
 
 

@@ -30,6 +30,17 @@ gchar *save_frame_to_jpeg(NvBufSurface *surface, NvDsFrameMeta *frame_meta,
                           const gchar *base_output_dir, gint quality, 
                           gboolean exclude_letterbox, LetterboxGeometry *lb_geom);
 
+/**
+ * Encode frame to JPEG in memory without writing to disk.
+ * On success, *out_data is g_malloc()-allocated and *out_size is set.
+ * Returns TRUE on success, FALSE on failure.
+ * Caller must g_free() *out_data.
+ */
+gboolean save_frame_to_jpeg_mem(NvBufSurface *surface, NvDsFrameMeta *frame_meta,
+                                gint quality, gboolean exclude_letterbox,
+                                LetterboxGeometry *lb_geom,
+                                guchar **out_data, gsize *out_size);
+
 #ifdef __cplusplus
 }
 #endif

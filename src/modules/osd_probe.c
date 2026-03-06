@@ -112,19 +112,14 @@ add_ntp_timestamp_overlay(NvDsBatchMeta *batch_meta, NvDsFrameMeta *frame_meta)
     return;
 
   // Convert NTP timestamp (nanoseconds) to human-readable string
-  gdouble timestamp_sec = (gdouble)frame_meta->ntp_timestamp / 1e9;
-  time_t  timestamp_time = (time_t)timestamp_sec;
-  struct tm *tm_info = localtime(&timestamp_time);
+  gchar ntp_timestamp[64];
+  format_ntp_timestamp(frame_meta->ntp_timestamp, ntp_timestamp, sizeof(ntp_timestamp));
 
-  gchar timestamp_str[64];
-  strftime(timestamp_str, sizeof(timestamp_str), "%Y-%m-%d %H:%M:%S", tm_info);
-
-  gint millisec = (gint)((timestamp_sec - (gdouble)timestamp_time) * 1000);
-
+  // 
   gchar full_timestamp[128];
   g_snprintf(full_timestamp, sizeof(full_timestamp),
-             "FRAME %d, NTP: %s.%03d",
-             frame_meta->frame_num, timestamp_str, millisec);
+             "FRAME %d, NTP: %s",
+             frame_meta->frame_num, ntp_timestamp);
 
   // Configure text overlay parameters
   NvOSD_TextParams *txt_params  = &display_meta->text_params[0];
@@ -198,10 +193,17 @@ nvosd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_da
     int mux_h = surface->surfaceList[frame_meta->batch_id].height;  // = streammux height
     LetterboxGeometry lb_geom = compute_letterbox_geometry(mux_w, mux_h, 
         frame_meta->source_frame_width, frame_meta->source_frame_height);
+
+    // get frame meta timestamp (ntp_timestamp in ns, converted to seconds)
+    gchar ntp_timestamp[64];
+    format_ntp_timestamp(frame_meta->ntp_timestamp, ntp_timestamp, sizeof(ntp_timestamp));
     
-    GST_DEBUG ("stream %d==%d, source [%d X %d], streammux size [%d X %d], letterbox [%d X %d], pad [%d, %d], scale %.2f\n",
+    GstClockTime pts = frame_meta->buf_pts;
+
+    g_print("[osd] stream %d==%d, frame %d, org size [%d X %d],  streammux size [%d X %d], letterbox [%d X %d], pad [%d, %d], scale %.2f, PTS=%" GST_TIME_FORMAT ", NTP=%s\n",
             frame_meta->source_id,
             frame_meta->pad_index,
+            frame_meta->frame_num,
             frame_meta->source_frame_width,
             frame_meta->source_frame_height,
             mux_w, 
@@ -210,7 +212,9 @@ nvosd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_da
             lb_geom.content_h,
             lb_geom.pad_x,
             lb_geom.pad_y,
-            lb_geom.scale
+            lb_geom.scale,
+            GST_TIME_ARGS(pts),
+            ntp_timestamp
           );
     //  stream 0==0, source [1280 X 720], streammux size [640 X 640], letterbox [640 X 360], pad [0, 140], scale 0.50
 

@@ -155,7 +155,7 @@ docker load -i ./temp/deepstream:8.0-gc-triton-devel.tar
 ```bash
 cd /opt/nvidia/deepstream/deepstream/samples/streams
 
-gst-launch-1.0 filesrc location= sample_720p.mp4 ! qtdemux ! h264parse ! nvv4l2decoder ! nveglglessink -v
+gst-launch-1.0 filesrc location=sample_720p.mp4 ! qtdemux ! h264parse ! nvv4l2decoder ! nveglglessink -v
 
 # run with nvstreammux
 gst-launch-1.0 \

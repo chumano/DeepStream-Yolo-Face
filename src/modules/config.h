@@ -106,6 +106,12 @@ typedef struct {
   gchar   *dir;
   guint    quality;  /**< JPEG quality 0–100 */
   gboolean exclude_letterbox; /**< if TRUE, crop out letterbox padding before saving */
+
+  /** Saving mode */
+  gboolean save_all_frames;         /**< TRUE → save every frame unconditionally;
+                                         FALSE → smart-save (only on detection) */
+  gdouble  pre_buffer_duration_sec; /**< seconds of frames to keep in the buffer
+                                         (default 1.0) */
 } AppFrameSaveConfig;
 
 /** Per-frame JSON output */

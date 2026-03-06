@@ -58,6 +58,17 @@ bus_call(GstBus *bus, GstMessage *message, gpointer user_data)
 // Source bin helpers
 // =============================================================================
 
+/**
+ * Context passed to the uridecodebin "pad-added" signal.
+ *
+ * When a per-source raw capture branch is present (frame_save enabled) the
+ * decoded NVMM pad is linked to the tee's static sink pad.  Otherwise it is
+ * linked directly to the nvstreammux request pad stored in mux_sink_pad.
+ */
+typedef struct {
+  GstElement *tee;           /**< non-NULL when raw capture branch exists */
+  GstPad     *mux_sink_pad;  /**< non-NULL when tee is NULL (direct mode) */
+} SourceBinCtx;
 static void
 uridecodebin_child_added_callback(GstChildProxy *child_proxy, GObject *object,
                                    gchar *name, gpointer user_data)
@@ -81,7 +92,7 @@ static void
 uridecodebin_pad_added_callback(GstElement *decodebin, GstPad *pad,
                                  gpointer user_data)
 {
-  GstPad *nvstreammux_sink_pad = (GstPad *) user_data;
+  SourceBinCtx *ctx = (SourceBinCtx *) user_data;
 
   GstCaps *caps = gst_pad_get_current_caps(pad);
   if (!caps)
@@ -93,9 +104,20 @@ uridecodebin_pad_added_callback(GstElement *decodebin, GstPad *pad,
 
   if (!strncmp(name, "video", 5)) {
     if (gst_caps_features_contains(features, "memory:NVMM")) {
-      if (gst_pad_link(pad, nvstreammux_sink_pad) != GST_PAD_LINK_OK) {
-        GST_ERROR("Failed to link source to nvstreammux sink pad");
+      GstPad *sink_pad;
+      if (ctx->tee) {
+        /* Route through per-source tee (raw capture branch) */
+        sink_pad = gst_element_get_static_pad(ctx->tee, "sink");
+      } else {
+        /* Direct link to nvstreammux */
+        sink_pad = ctx->mux_sink_pad;
+        gst_object_ref(sink_pad);  /* match unref below */
       }
+      if (gst_pad_link(pad, sink_pad) != GST_PAD_LINK_OK) {
+        GST_ERROR("Failed to link source to %s pad",
+                  ctx->tee ? "src_tee" : "nvstreammux");
+      }
+      gst_object_unref(sink_pad);
     } else {
       GST_ERROR("decodebin did not pick NVIDIA decoder plugin");
     }
@@ -105,34 +127,24 @@ uridecodebin_pad_added_callback(GstElement *decodebin, GstPad *pad,
 }
 
 static GstElement *
-create_uridecodebin(guint stream_id, const gchar *uri, GstElement *nvstreammux)
+create_uridecodebin(guint stream_id, const gchar *uri, SourceBinCtx *ctx)
 {
   gchar bin_name[32] = {};
   g_snprintf(bin_name, 32, "source-bin-%04d", stream_id);
 
   GstElement *uridecodebin = gst_element_factory_make("uridecodebin", bin_name);
 
-  if (g_strrstr(uri, "rtsp://"))
-    configure_source_for_ntp_sync(uridecodebin);
+  if (g_strrstr(uri, "rtsp://")) {
+    configure_source_for_ntp_sync(uridecodebin); //"rtspsrc" or "uridecodebin" with an RTSP uri.
+  }
 
   g_object_set(G_OBJECT(uridecodebin), "uri", uri, NULL);
 
-  gchar pad_name[16];
-  g_snprintf(pad_name, 16, "sink_%u", stream_id);
-
-  GstPad *nvstreammux_sink_pad = gst_element_get_request_pad(nvstreammux, pad_name);
-  if (!nvstreammux_sink_pad) {
-    GST_ERROR("Failed to get nvstreammux %s pad", pad_name);
-    return NULL;
-  }
-
   g_signal_connect(G_OBJECT(uridecodebin), "pad-added",
-                   G_CALLBACK(uridecodebin_pad_added_callback),
-                   nvstreammux_sink_pad);
+                   G_CALLBACK(uridecodebin_pad_added_callback), ctx);
   g_signal_connect(G_OBJECT(uridecodebin), "child-added",
                    G_CALLBACK(uridecodebin_child_added_callback), NULL);
 
-  gst_object_unref(nvstreammux_sink_pad);
   return uridecodebin;
 }
 
@@ -163,10 +175,131 @@ create_app_pipeline(GMainLoop *loop, GCallback appsink_callback,
   }
 
   // ---------------------------------------------------------------------------
-  // Source bins (one per URI)
+  // Source bins (one per URI) + optional per-source raw capture branch
+  ap->num_sources    = app_config.source.count;
+  ap->src_tees       = g_new0(GstElement *, ap->num_sources);
+  ap->src_nvvidconvs = g_new0(GstElement *, ap->num_sources);
+  ap->src_capsfilters= g_new0(GstElement *, ap->num_sources);
+  ap->src_queues     = g_new0(GstElement *, ap->num_sources);
+  ap->src_appsinks   = g_new0(GstElement *, ap->num_sources);
+
   for (guint i = 0; i < app_config.source.count; i++) {
-    GstElement *uridecodebin = create_uridecodebin(i, app_config.source.uris[i],
-                                                    ap->nvstreammux);
+    /* --- Request per-source nvstreammux sink pad --- */
+    gchar pad_name[16];
+    g_snprintf(pad_name, 16, "sink_%u", i);
+    GstPad *mux_sink_pad = gst_element_get_request_pad(ap->nvstreammux, pad_name);
+    if (!mux_sink_pad) {
+      g_printerr("ERROR - Failed to get nvstreammux %s pad\n", pad_name);
+      goto fail;
+    }
+
+    /* --- Build SourceBinCtx (lives until destroy_app_pipeline) --- */
+    SourceBinCtx *ctx = g_new0(SourceBinCtx, 1);
+    ctx->mux_sink_pad = mux_sink_pad;  /* always track; cleared once consumed */
+    ap->_src_ctxs = g_list_append(ap->_src_ctxs, ctx);
+
+    if (app_config.frame_save.enabled) {
+      /* ── Per-source tee ── */
+      gchar elem_name[48];
+      g_snprintf(elem_name, 48, "src_tee_%u", i);
+      ap->src_tees[i] = gst_element_factory_make("tee", elem_name);
+      if (!ap->src_tees[i] || !gst_bin_add(GST_BIN(ap->pipeline), ap->src_tees[i])) {
+        g_printerr("ERROR - Failed to create src_tee_%u\n", i);
+        goto fail;
+      }
+      g_object_set(G_OBJECT(ap->src_tees[i]), "allow-not-linked", FALSE, NULL);
+
+      /* ── Raw capture chain: nvvidconv → capsfilter(RGBA) → queue → appsink ── */
+      g_snprintf(elem_name, 48, "src_nvvidconv_%u", i);
+      ap->src_nvvidconvs[i] = gst_element_factory_make("nvvideoconvert", elem_name);
+      g_snprintf(elem_name, 48, "src_capsfilter_%u", i);
+      ap->src_capsfilters[i] = gst_element_factory_make("capsfilter", elem_name);
+      g_snprintf(elem_name, 48, "src_queue_%u", i);
+      ap->src_queues[i] = gst_element_factory_make("queue", elem_name);
+      g_snprintf(elem_name, 48, "src_appsink_%u", i);
+      ap->src_appsinks[i] = gst_element_factory_make("appsink", elem_name);
+
+      if (!ap->src_nvvidconvs[i] || !ap->src_capsfilters[i] ||
+          !ap->src_queues[i]     || !ap->src_appsinks[i]) {
+        g_printerr("ERROR - Failed to create raw capture elements for source %u\n", i);
+        goto fail;
+      }
+      gst_bin_add_many(GST_BIN(ap->pipeline),
+                       ap->src_nvvidconvs[i], ap->src_capsfilters[i],
+                       ap->src_queues[i],     ap->src_appsinks[i], NULL);
+
+      /* Configure raw capture chain */
+      GstCaps *rgba_caps = gst_caps_from_string(
+          "video/x-raw(memory:NVMM), format=RGBA");
+      g_object_set(G_OBJECT(ap->src_capsfilters[i]), "caps", rgba_caps, NULL);
+      gst_caps_unref(rgba_caps);
+
+      /* Leaky downstream queue — drop oldest when full */
+      g_object_set(G_OBJECT(ap->src_queues[i]),
+                   "max-size-buffers", 5, "leaky", 2, NULL);
+
+      /* Non-synced appsink, drop when full */
+      g_object_set(G_OBJECT(ap->src_appsinks[i]),
+                   "emit-signals", TRUE,
+                   "sync",         FALSE,
+                   "max-buffers",  5,
+                   "drop",        TRUE, NULL);
+
+      if (!app_config.jetson) {
+        g_object_set(G_OBJECT(ap->src_nvvidconvs[i]),
+                     "nvbuf-memory-type", NVBUF_MEM_CUDA_DEVICE,
+                     "gpu_id",           app_config.gpu_id, NULL);
+      }
+
+      /* Link: tee src_0 → nvstreammux sink */
+      {
+        GstPad *tee_mux_src = gst_element_get_request_pad(
+            ap->src_tees[i], "src_%u");
+        if (gst_pad_link(tee_mux_src, mux_sink_pad) != GST_PAD_LINK_OK) {
+          g_printerr("ERROR - Failed to link tee to nvstreammux for source %u\n", i);
+          gst_object_unref(tee_mux_src);
+          gst_object_unref(mux_sink_pad);
+          goto fail;
+        }
+        gst_object_unref(tee_mux_src);
+        gst_object_unref(mux_sink_pad);  /* owned by mux; drop our ref */
+        ctx->mux_sink_pad = NULL;         /* consumed — don't double-unref in cleanup */
+      }
+
+      /* Link: tee src_1 → nvvidconv */
+      {
+        GstPad *tee_cap_src = gst_element_get_request_pad(
+            ap->src_tees[i], "src_%u");
+        GstPad *nvvc_sink = gst_element_get_static_pad(
+            ap->src_nvvidconvs[i], "sink");
+        if (gst_pad_link(tee_cap_src, nvvc_sink) != GST_PAD_LINK_OK) {
+          g_printerr("ERROR - Failed to link tee to nvvidconv for source %u\n", i);
+          gst_object_unref(tee_cap_src);
+          gst_object_unref(nvvc_sink);
+          goto fail;
+        }
+        gst_object_unref(tee_cap_src);
+        gst_object_unref(nvvc_sink);
+      }
+
+      if (!gst_element_link_many(ap->src_nvvidconvs[i], ap->src_capsfilters[i],
+                                 ap->src_queues[i], ap->src_appsinks[i], NULL)) {
+        g_printerr("ERROR - Failed to link raw capture chain for source %u\n", i);
+        goto fail;
+      }
+
+      ctx->tee          = ap->src_tees[i];
+      /* mux_sink_pad already consumed and cleared above */
+
+    } else {
+      /* Direct link: uridecodebin decoded pad → nvstreammux (pad-added fires) */
+      ctx->tee = NULL;
+      /* ctx->mux_sink_pad already set above; pad-added callback will use it */
+    }
+
+    /* --- Create uridecodebin with SourceBinCtx as pad-added context --- */
+    GstElement *uridecodebin = create_uridecodebin(
+        i, app_config.source.uris[i], ctx);
     if (!uridecodebin || !gst_bin_add(GST_BIN(ap->pipeline), uridecodebin)) {
       g_printerr("ERROR - Failed to create uridecodebin for source %d\n", i);
       goto fail;
@@ -449,7 +582,21 @@ create_app_pipeline(GMainLoop *loop, GCallback appsink_callback,
 
 fail:
   if (ap->pipeline)
-    gst_object_unref(ap->pipeline);
+    gst_object_unref(ap->pipeline);  /* unrefs all child elements */
+
+  for (GList *l = ap->_src_ctxs; l != NULL; l = l->next) {
+    SourceBinCtx *ctx = (SourceBinCtx *)l->data;
+    if (ctx && ctx->mux_sink_pad)
+      gst_object_unref(ctx->mux_sink_pad);
+    g_free(ctx);
+  }
+  g_list_free(ap->_src_ctxs);
+
+  g_free(ap->src_tees);
+  g_free(ap->src_nvvidconvs);
+  g_free(ap->src_capsfilters);
+  g_free(ap->src_queues);
+  g_free(ap->src_appsinks);
   g_free(ap->perf_struct);
   g_free(ap);
   return NULL;
@@ -466,6 +613,22 @@ destroy_app_pipeline(AppPipeline *p)
 
   if (p->bus_watch_id)
     g_source_remove(p->bus_watch_id);
+
+  /* Free SourceBinCtx list and any unreleased pad refs */
+  for (GList *l = p->_src_ctxs; l != NULL; l = l->next) {
+    SourceBinCtx *ctx = (SourceBinCtx *)l->data;
+    if (ctx && ctx->mux_sink_pad)
+      gst_object_unref(ctx->mux_sink_pad);
+    g_free(ctx);
+  }
+  g_list_free(p->_src_ctxs);
+
+  /* Free per-source element pointer arrays (elements are owned by pipeline) */
+  g_free(p->src_tees);
+  g_free(p->src_nvvidconvs);
+  g_free(p->src_capsfilters);
+  g_free(p->src_queues);
+  g_free(p->src_appsinks);
 
   g_free(p->perf_struct);
   g_free(p);
