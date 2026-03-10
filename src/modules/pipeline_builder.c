@@ -351,6 +351,13 @@ create_app_pipeline(GMainLoop *loop, GCallback appsink_callback,
       g_object_set(G_OBJECT(ap->src_queues[i]),
                    "max-size-buffers", 5, "leaky", 2, NULL);
 
+      /* Track this queue's drops in the pipeline monitor */
+      if (monitor) {
+        gchar mon_name[32];
+        g_snprintf(mon_name, sizeof(mon_name), "src_queue_%u", i);
+        pipeline_monitor_add_queue(monitor, mon_name, ap->src_queues[i]);
+      }
+
       /* Non-synced appsink, drop when full */
       g_object_set(G_OBJECT(ap->src_appsinks[i]),
                    "emit-signals", TRUE,

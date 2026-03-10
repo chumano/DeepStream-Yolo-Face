@@ -43,6 +43,9 @@ struct _PipelineMonitor {
   guint    report_interval_sec;
 
   /* Per-source counters – updated with g_atomic_int_add / g_atomic_int_inc */
+  gint64       frames_from_source [PIPELINE_MONITOR_MAX_SOURCES]; /* raw decoded frames (tee appsink) */
+  gint64       frames_src_pts_gap [PIPELINE_MONITOR_MAX_SOURCES]; /* PTS jump events (atomic) */
+  GstClockTime last_src_pts       [PIPELINE_MONITOR_MAX_SOURCES]; /* last observed PTS (lock) */
   gint64   frames_received   [PIPELINE_MONITOR_MAX_SOURCES];
   gint64   frames_inferred   [PIPELINE_MONITOR_MAX_SOURCES];
   gint64   frames_with_dets  [PIPELINE_MONITOR_MAX_SOURCES];
@@ -206,6 +209,10 @@ pipeline_monitor_new(guint report_interval_sec, guint num_sources)
   m->num_sources          = num_sources;
   m->report_interval_sec  = report_interval_sec;
 
+  memset(m->frames_from_source, 0, sizeof(m->frames_from_source));
+  memset(m->frames_src_pts_gap, 0, sizeof(m->frames_src_pts_gap));
+  for (guint i = 0; i < PIPELINE_MONITOR_MAX_SOURCES; i++)
+    m->last_src_pts[i] = GST_CLOCK_TIME_NONE;
   memset(m->frames_received,    0, sizeof(m->frames_received));
   memset(m->frames_inferred,    0, sizeof(m->frames_inferred));
   memset(m->frames_with_dets,   0, sizeof(m->frames_with_dets));
@@ -339,6 +346,37 @@ pipeline_monitor_add_queue(PipelineMonitor *monitor,
 }
 
 void
+pipeline_monitor_record_source_frame(PipelineMonitor *monitor,
+                                     guint            source_id,
+                                     GstClockTime     pts_ns,
+                                     gdouble          gap_threshold_ms)
+{
+  if (!monitor) return;
+  if (source_id >= PIPELINE_MONITOR_MAX_SOURCES) return;
+
+  g_atomic_int_add((volatile gint *)&monitor->frames_from_source[source_id], 1);
+
+  if (pts_ns == GST_CLOCK_TIME_NONE)
+    return;
+
+  gdouble threshold_ns = (gap_threshold_ms > 0.0 ? gap_threshold_ms : 200.0) * 1e6;
+
+  g_mutex_lock(&monitor->lock);
+  GstClockTime last = monitor->last_src_pts[source_id];
+  monitor->last_src_pts[source_id] = pts_ns;
+  g_mutex_unlock(&monitor->lock);
+
+  if (last != GST_CLOCK_TIME_NONE && pts_ns > last) {
+    gdouble gap_ns = (gdouble)(pts_ns - last);
+    if (gap_ns > threshold_ns) {
+      g_atomic_int_add((volatile gint *)&monitor->frames_src_pts_gap[source_id], 1);
+      GST_WARNING("[src-drop] src=%u PTS gap %.1f ms (threshold %.0f ms) — likely dropped frame(s)",
+                  source_id, gap_ns / 1e6, gap_threshold_ms > 0.0 ? gap_threshold_ms : 200.0);
+    }
+  }
+}
+
+void
 pipeline_monitor_record_frame(PipelineMonitor *monitor,
                               guint            source_id,
                               gboolean         infer_done,
@@ -412,6 +450,8 @@ pipeline_monitor_snapshot(PipelineMonitor         *monitor,
   out->num_sources = monitor->num_sources;
 
   for (guint i = 0; i < monitor->num_sources; i++) {
+    out->sources[i].frames_from_source = monitor->frames_from_source[i];
+    out->sources[i].frames_src_pts_gap = monitor->frames_src_pts_gap[i];
     out->sources[i].frames_received    = monitor->frames_received[i];
     out->sources[i].frames_inferred    = monitor->frames_inferred[i];
     out->sources[i].frames_with_detections = monitor->frames_with_dets[i];
@@ -513,19 +553,27 @@ pipeline_monitor_print_report(PipelineMonitor *monitor)
 
   /* Per-source stats */
   g_print("║  SOURCE STATISTICS                                           \n");
-  g_print("║  %-8s  %10s  %10s  %10s  %10s\n",
-          "Source", "Rcv Frames", "Inf Frames", "Det Frames", "Objects");
+  g_print("║  %-8s  %10s  %8s  %12s  %12s  %12s  %8s\n",
+          "Source", "SrcFrames", "PtsGaps", "->Mux(drop%)", "Inf(%)", "Det(%)", "Objects");
   for (guint i = 0; i < snap.num_sources; i++) {
     const PipelineSourceStats *s = &snap.sources[i];
     gdouble infer_ratio = (s->frames_received > 0)
         ? 100.0 * (gdouble)s->frames_inferred / (gdouble)s->frames_received : 0.0;
     gdouble det_ratio   = (s->frames_inferred > 0)
         ? 100.0 * (gdouble)s->frames_with_detections / (gdouble)s->frames_inferred : 0.0;
+    /* frames dropped between decoded output and streammux appsink */
+    gint64  pre_mux_drop = (s->frames_from_source > s->frames_received)
+        ? s->frames_from_source - s->frames_received : 0;
+    gdouble drop_pct = (s->frames_from_source > 0)
+        ? 100.0 * (gdouble)pre_mux_drop / (gdouble)s->frames_from_source : 0.0;
 
-    g_print("║  src[%2u]    %10"G_GINT64_FORMAT"  %10"G_GINT64_FORMAT
-            " (%5.1f%%)  %10"G_GINT64_FORMAT" (%5.1f%%)  %10"G_GINT64_FORMAT"\n",
+    g_print("║  src[%2u]  %10"G_GINT64_FORMAT"  %8"G_GINT64_FORMAT
+            "  %8"G_GINT64_FORMAT"(-%4.1f%%)  %8"G_GINT64_FORMAT"(%5.1f%%)"
+            "  %8"G_GINT64_FORMAT"(%5.1f%%)  %8"G_GINT64_FORMAT"\n",
             i,
-            s->frames_received,
+            s->frames_from_source,
+            s->frames_src_pts_gap,
+            s->frames_received, drop_pct,
             s->frames_inferred, infer_ratio,
             s->frames_with_detections, det_ratio,
             s->objects_detected);

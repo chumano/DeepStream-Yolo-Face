@@ -113,6 +113,12 @@ raw_src_appsink_callback(GstElement *appsink, gpointer user_data)
   if (source_id < MAX_RAW_SOURCES)
     frame_num = ++raw_src_frame_counters[source_id];
 
+  /* Record source-level frame arrival and check for PTS gaps (network/decoder drops) */
+  if (pipeline_monitor) {
+    pipeline_monitor_record_source_frame(pipeline_monitor, source_id, pts,
+                                         200.0 /* ms gap threshold ≈ 5 dropped frames @25fps */);
+  }
+
   /*
    * The raw surface is NOT batched (single frame, batch_id = 0).
    * No letterbox exists here — save the full frame.

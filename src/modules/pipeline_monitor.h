@@ -21,6 +21,10 @@ extern "C" {
 // =============================================================================
 
 typedef struct {
+  /* Decoded frames emitted by the source (raw tee appsink, before streammux) */
+  gint64 frames_from_source;
+  /* Frames where PTS jumped by more than the expected interval (source-level drops) */
+  gint64 frames_src_pts_gap;
   /* Frames arriving from this source (counted at appsink) */
   gint64 frames_received;
   /* Frames that had inference done */
@@ -139,6 +143,20 @@ void pipeline_monitor_free(PipelineMonitor *monitor);
 void pipeline_monitor_add_queue(PipelineMonitor *monitor,
                                 const gchar     *name,
                                 GstElement      *element);
+
+/**
+ * Record a decoded frame arriving directly from the source (raw tee appsink,
+ * before nvstreammux).  Also detects PTS gaps that indicate upstream drops
+ * (network packet loss, decoder drops, jitter-buffer discards).
+ *
+ * @param source_id      Source stream index.
+ * @param pts_ns         GstClockTime PTS of the buffer (GST_CLOCK_TIME_NONE to skip gap check).
+ * @param gap_threshold_ms  If the PTS jump exceeds this value (ms), count as a gap (0 → use 200 ms).
+ */
+void pipeline_monitor_record_source_frame(PipelineMonitor *monitor,
+                                          guint            source_id,
+                                          GstClockTime     pts_ns,
+                                          gdouble          gap_threshold_ms);
 
 /**
  * Record a processed frame for the given source.
