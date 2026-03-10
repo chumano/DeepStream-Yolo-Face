@@ -231,6 +231,24 @@ create_nvurisrcbin(guint stream_id, const gchar *uri, SourceBinCtx *ctx)
                  "rtsp-reconnect-interval", 15, // Reconnect every 15 seconds
                  "rtsp-reconnect-attempts", -1, // Retry indefinitely
                   NULL);
+
+    /* ── Smart Record ── */
+    if (app_config.smart_record.enabled && app_config.smart_record.dir) {
+      g_object_set(G_OBJECT(nvurisrcbin),
+                   "smart-record",           1,
+                   "smart-rec-dir-path",      app_config.smart_record.dir,
+                   "smart-rec-cache",         app_config.smart_record.cache_size_sec,
+                   "smart-rec-default-duration", app_config.smart_record.default_duration_sec,
+                   "smart-rec-container",     app_config.smart_record.container,
+                   NULL);
+      if (app_config.smart_record.file_prefix) {
+        g_object_set(G_OBJECT(nvurisrcbin),
+                     "smart-rec-file-prefix", app_config.smart_record.file_prefix,
+                     NULL);
+      }
+      GST_INFO("pipeline_builder: smart-record enabled for source %u (dir=%s)",
+               stream_id, app_config.smart_record.dir);
+    }
   }
 
   g_signal_connect(G_OBJECT(nvurisrcbin), "pad-added",
@@ -533,7 +551,7 @@ create_app_pipeline(GMainLoop *loop, GCallback appsink_callback,
                "drop",         (gint) app_config.appsink.drop,
                NULL);
   if (appsink_callback)
-    g_signal_connect(ap->appsink, "new-sample", appsink_callback, NULL);
+    g_signal_connect(ap->appsink, "new-sample", appsink_callback, ap);
 
   // ---------------------------------------------------------------------------
   // Configure elements

@@ -120,6 +120,22 @@ typedef struct {
   gchar   *dir;       /**< output directory, e.g. /app/outputs/json */
 } AppJsonSaveConfig;
 
+/** nvurisrcbin Smart Record
+ *
+ *  Only effective for RTSP sources.  When enabled, smart-record properties
+ *  are set on every nvurisrcbin at pipeline-creation time.  Recordings are
+ *  triggered (start-sr / stop-sr) from the appsink callback whenever the
+ *  inference engine reports one or more detected objects on a frame.
+ */
+typedef struct {
+  gboolean enabled;             /**< FALSE → smart-record disabled (default) */
+  gchar   *dir;                 /**< directory to write recording files into */
+  gchar   *file_prefix;         /**< filename prefix, default "SR" */
+  guint    cache_size_sec;      /**< ring-cache depth in seconds, default 30 */
+  guint    default_duration_sec;/**< max recording length before auto-stop, default 20 */
+  guint    container;           /**< 0 = MP4 (default), 1 = MKV */
+} AppSmartRecordConfig;
+
 // =============================================================================
 // Top-level application configuration
 // =============================================================================
@@ -149,6 +165,7 @@ typedef struct {
   AppOsdTextConfig     osd_text;
   AppFrameSaveConfig   frame_save;
   AppJsonSaveConfig    json_save;
+  AppSmartRecordConfig smart_record;
 } AppConfig;
 
 /** Single global instance — defined in config.c */

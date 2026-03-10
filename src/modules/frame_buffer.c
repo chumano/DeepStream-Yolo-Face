@@ -138,7 +138,7 @@ worker_execute_save(FrameBuffer *fb, const SaveTask *task)
   BufferedFrame *newest = (BufferedFrame *)g_queue_peek_head(sb->frames);
   if (newest->timestamp < pts_sec - kTolerance) {
     g_mutex_unlock(&sb->mutex);
-    GST_INFO("frame_buffer: [async] newest frame pts=%.6f < target pts=%.6f, will retry src=%u (attempt=%u)",
+    GST_DEBUG("frame_buffer: [async] newest frame pts=%.6f < target pts=%.6f, will retry src=%u (attempt=%u)",
               newest->timestamp, pts_sec, source_id, task->retry_count + 1);
     return TRUE;
   }
@@ -162,7 +162,7 @@ worker_execute_save(FrameBuffer *fb, const SaveTask *task)
           if (fp) {
             fwrite(f->jpeg_data, 1, f->jpeg_size, fp);
             fclose(fp);
-            GST_INFO("frame_buffer: [async] saved pts-matched frame src=%u num=%u pts=%.6f -> %s",
+            GST_DEBUG("frame_buffer: [async] saved pts-matched frame src=%u num=%u pts=%.6f -> %s",
                       source_id, f->frame_num, f->timestamp, abs_path);
             flushed++;
           } else {

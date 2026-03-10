@@ -78,6 +78,7 @@ clean_images:
 	- rm -r /app/outputs/faces/*
 	- rm -r /app/outputs/annotated_frames/*
 	- rm -r /app/outputs/json/*
+	- rm -r /app/outputs/smart_record/*
 
 run: clean_images $(APP)
 	GST_DEBUG=$(LOG_APP):$(LOG) ./$(APP) --config /app/configs/app.ini \

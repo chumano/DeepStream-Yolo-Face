@@ -33,8 +33,9 @@
   - save when face detected (smart saving) or save all frames
   - buffered orginal frame image for a short period of time (e.g. 1 second)  and save the buffered image when face detected
   - support multi source inputs and save original frame image for each source
+- [x] feature smart recording with nvurisrcbin. trigger recording by face detection and save video clip/
+  - https://docs.nvidia.com/metropolis/deepstream/7.1/text/DS_Smart_video.html
 - [ ] frame_buffer push raw frame data, then encode jpeg in buffer worker thread (currently push encoded jpeg data to frame_buffer)
-- [ ] feature smart recording with nvurisrcbin. trigger recording by face detection and save video clip/
 
 ```bash
 gst-launch-1.0 nvurisrcbin \

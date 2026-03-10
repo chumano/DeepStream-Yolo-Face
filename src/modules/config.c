@@ -126,6 +126,16 @@ AppConfig app_config = {
     .enabled = FALSE,
     .dir     = NULL,
   },
+
+  /* Smart Record (nvurisrcbin, RTSP only) */
+  .smart_record = {
+    .enabled              = FALSE,
+    .dir                  = NULL,
+    .file_prefix          = NULL,  /* NULL → nvurisrcbin default "Smart_Record" */
+    .cache_size_sec       = 30,
+    .default_duration_sec = 20,
+    .container            = 0,     /* 0 = MP4 */
+  },
 };
 
 
@@ -266,6 +276,14 @@ parse_config_file(const gchar *config_file, GError **error)
   /* ── [json_save] ─────────────────────────────────────────── */
   GET_BOOL("json_save", "enabled", app_config.json_save.enabled);
   GET_STR ("json_save", "dir",     app_config.json_save.dir);
+
+  /* ── [smart_record] ─────────────────────────────────────── */
+  GET_BOOL("smart_record", "enabled",          app_config.smart_record.enabled);
+  GET_STR ("smart_record", "dir",              app_config.smart_record.dir);
+  GET_STR ("smart_record", "file-prefix",      app_config.smart_record.file_prefix);
+  GET_INT ("smart_record", "cache-size",       app_config.smart_record.cache_size_sec);
+  GET_INT ("smart_record", "default-duration", app_config.smart_record.default_duration_sec);
+  GET_INT ("smart_record", "container",        app_config.smart_record.container);
 
 #undef GET_STR
 #undef GET_STR_ARRAY
@@ -568,6 +586,13 @@ static void print_app_config(void) {
     app_config.frame_save.exclude_letterbox ? "TRUE" : "FALSE",
     app_config.frame_save.save_all_frames   ? "TRUE" : "FALSE",
     app_config.frame_save.pre_buffer_duration_sec);
+  g_print("\n  smart_record: enabled=%s dir=%s file_prefix=%s cache_size_sec=%u default_duration_sec=%u container=%u",
+    app_config.smart_record.enabled ? "TRUE" : "FALSE",
+    app_config.smart_record.dir ? app_config.smart_record.dir : "(none)",
+    app_config.smart_record.file_prefix ? app_config.smart_record.file_prefix : "(none)",
+    app_config.smart_record.cache_size_sec,
+    app_config.smart_record.default_duration_sec,
+    app_config.smart_record.container);
   g_print("\n  json_save: enabled=%s dir=%s\n==========================\n\n",
     app_config.json_save.enabled ? "TRUE" : "FALSE",
     app_config.json_save.dir ? app_config.json_save.dir : "(none)");
@@ -610,4 +635,10 @@ config_free(void)
 
   g_free(app_config.json_save.dir);
   app_config.json_save.dir = NULL;
+
+  g_free(app_config.smart_record.dir);
+  app_config.smart_record.dir = NULL;
+
+  g_free(app_config.smart_record.file_prefix);
+  app_config.smart_record.file_prefix = NULL;
 }

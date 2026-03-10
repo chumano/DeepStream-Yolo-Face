@@ -399,6 +399,7 @@ save_frame_to_json(guint source_id, guint frame_num, gdouble timestamp,
 static GstFlowReturn
 appsink_new_sample_callback(GstElement *appsink, gpointer user_data)
 {
+  AppPipeline *ap = (AppPipeline *)user_data;
   GstSample *sample = NULL;
   
   // Pull sample from appsink
@@ -532,7 +533,28 @@ appsink_new_sample_callback(GstElement *appsink, gpointer user_data)
       // trigger save frame
       frame_buffer_save_frame(frame_buffer, frame_meta->source_id, detection_pts_sec);
     }
-    
+
+    // Trigger nvurisrcbin Smart Record on detection
+    // https://docs.nvidia.com/metropolis/deepstream/7.1/text/DS_Smart_video.html
+    if (app_config.smart_record.enabled
+        && ap
+        && frame_meta->obj_meta_list != NULL
+        && frame_meta->num_obj_meta > 0) {
+      guint src_id = frame_meta->source_id;
+      if (src_id < ap->num_sources && ap->src_bins[src_id]) {
+        /* start-sr(sessionId, start_time=cache_size, duration=0, file_path=NULL)
+         * start_time: how many seconds of cache to include before the trigger.
+         * duration=0: record until stop-sr is sent (auto-stop by default-duration). */
+        guint32 sessId = 0;
+        guint start_time = app_config.smart_record.cache_size_sec;
+        guint duration   = 0;   /* 0 → auto-stop after default-duration */
+        g_signal_emit_by_name(ap->src_bins[src_id], "start-sr",
+                              &sessId, start_time, duration, NULL);
+        GST_DEBUG("[smart-record] start-sr triggered for src=%u frame=%u, sessionId=%u",
+                 src_id, frame_meta->frame_num, sessId);
+      }
+    }
+
     // Process each object in frame
     GPtrArray *obj_jsons = g_ptr_array_new_with_free_func(g_free);
     NvDsMetaList *l_obj = NULL;
