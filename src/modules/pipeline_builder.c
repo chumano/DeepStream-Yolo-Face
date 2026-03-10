@@ -13,18 +13,54 @@ GST_DEBUG_CATEGORY_EXTERN(deepstream_debug_category);
 #define GST_CAT_DEFAULT deepstream_debug_category
 
 // =============================================================================
+// Bus callback helpers
+// =============================================================================
+
+/**
+ * Walk the element hierarchy from @element upward until we reach a direct
+ * child of @pipeline whose name starts with "source-bin-".
+ * Returns a new GstElement reference on success (caller must gst_object_unref)
+ * or NULL when not found.
+ */
+static GstElement *
+find_toplevel_source_bin(GstElement *element, GstElement *pipeline)
+{
+  GstObject *obj = gst_object_ref(GST_OBJECT(element));
+  GstElement *found = NULL;
+
+  while (obj) {
+    GstObject *parent = gst_object_get_parent(obj);
+    if (!parent) {
+      gst_object_unref(obj);
+      break;
+    }
+    if (GST_ELEMENT(parent) == pipeline) {
+      if (g_str_has_prefix(GST_OBJECT_NAME(obj), "source-bin-"))
+        found = GST_ELEMENT(gst_object_ref(obj));
+      gst_object_unref(obj);
+      gst_object_unref(parent);
+      break;
+    }
+    gst_object_unref(obj);
+    obj = parent;
+  }
+
+  return found;
+}
+
+// =============================================================================
 // Bus callback
 // =============================================================================
 
 static gboolean
 bus_call(GstBus *bus, GstMessage *message, gpointer user_data)
 {
-  GMainLoop *loop = (GMainLoop *) user_data;
+  AppPipeline *ap = (AppPipeline *) user_data;
   switch (GST_MESSAGE_TYPE(message)) {
     case GST_MESSAGE_EOS:
     {
       GST_DEBUG("EOS");
-      g_main_loop_quit(loop);
+      g_main_loop_quit(ap->loop);
       break;
     }
     case GST_MESSAGE_WARNING:
@@ -43,9 +79,32 @@ bus_call(GstBus *bus, GstMessage *message, gpointer user_data)
       GError *error;
       gst_message_parse_error(message, &error, &debug);
       GST_ERROR("%s - %s", error->message, debug);
+
+      /*
+       * For GStreamer resource errors (typically RTSP connection drops) try to
+       * restart only the affected source bin so the rest of the pipeline keeps
+       * running.  Any other error domain is treated as fatal.
+       */
+      if (error->domain == GST_RESOURCE_ERROR && ap && ap->pipeline) {
+        GstElement *src_bin = find_toplevel_source_bin(
+            GST_ELEMENT(GST_MESSAGE_SRC(message)), ap->pipeline);
+        if (src_bin) {
+          GST_WARNING("RTSP resource error on %s — restarting source bin",
+                      GST_ELEMENT_NAME(src_bin));
+          gst_element_set_state(src_bin, GST_STATE_NULL);
+          gst_element_set_state(src_bin, GST_STATE_PLAYING);
+          gst_object_unref(src_bin);
+          g_free(debug);
+          g_error_free(error);
+          break;
+        }
+      }
+
       g_free(debug);
       g_error_free(error);
-      g_main_loop_quit(loop);
+      /* Non-recoverable error — quit the main loop */
+      if (ap && ap->loop)
+        g_main_loop_quit(ap->loop);
       break;
     }
     default:
@@ -59,7 +118,7 @@ bus_call(GstBus *bus, GstMessage *message, gpointer user_data)
 // =============================================================================
 
 /**
- * Context passed to the uridecodebin "pad-added" signal.
+ * Context passed to the nvurisrcbin "pad-added" signal.
  *
  * When a per-source raw capture branch is present (frame_save enabled) the
  * decoded NVMM pad is linked to the tee's static sink pad.  Otherwise it is
@@ -85,12 +144,32 @@ uridecodebin_child_added_callback(GstChildProxy *child_proxy, GObject *object,
       g_object_set(object, "cudadec-memtype", 0,
                    "gpu-id", app_config.gpu_id, NULL);
     }
+  } else if (g_strrstr(name, "rtspsrc")) {
+    /*
+     * Tune the rtspsrc element for resilient RTSP reconnection:
+     *   do-rtsp-keep-alive FALSE — suppress periodic keep-alive RTSP OPTIONS
+     *                              requests; a dead connection shouldn't
+     *                              trigger a flood of failed sends.
+     *   timeout            5 s   — give up waiting for a server response
+     *                              within 5 s so the reconnect cycle fires
+     *                              promptly.
+     *   tcp-timeout        5 s   — same for the underlying TCP socket.
+     *   retry              10    — rtspsrc-level retry count before escalating
+     *                              to a bus ERROR (nvurisrcbin will still
+     *                              attempt higher-level reconnects).
+     */
+    // g_object_set(object,
+    //              "do-rtsp-keep-alive", FALSE,
+    //              "timeout",           (guint64) 5000000,  /* µs */
+    //              "tcp-timeout",       (guint64) 5000000,  /* µs */
+    //              "retry",             10,
+    //              NULL);
   }
 }
 
 static void
-uridecodebin_pad_added_callback(GstElement *decodebin, GstPad *pad,
-                                 gpointer user_data)
+nvurisrcbin_pad_added_callback(GstElement *srcbin, GstPad *pad,
+                                gpointer user_data)
 {
   SourceBinCtx *ctx = (SourceBinCtx *) user_data;
 
@@ -119,7 +198,7 @@ uridecodebin_pad_added_callback(GstElement *decodebin, GstPad *pad,
       }
       gst_object_unref(sink_pad);
     } else {
-      GST_ERROR("decodebin did not pick NVIDIA decoder plugin");
+      GST_ERROR("nvurisrcbin did not produce NVMM output");
     }
   }
 
@@ -127,25 +206,39 @@ uridecodebin_pad_added_callback(GstElement *decodebin, GstPad *pad,
 }
 
 static GstElement *
-create_uridecodebin(guint stream_id, const gchar *uri, SourceBinCtx *ctx)
+create_nvurisrcbin(guint stream_id, const gchar *uri, SourceBinCtx *ctx)
 {
   gchar bin_name[32] = {};
   g_snprintf(bin_name, 32, "source-bin-%04d", stream_id);
 
-  GstElement *uridecodebin = gst_element_factory_make("uridecodebin", bin_name);
-
-  if (g_strrstr(uri, "rtsp://")) {
-    configure_source_for_ntp_sync(uridecodebin); //"rtspsrc" or "uridecodebin" with an RTSP uri.
+  GstElement *nvurisrcbin = gst_element_factory_make("nvurisrcbin", bin_name);
+  if (!nvurisrcbin) {
+    g_printerr("ERROR - Failed to create nvurisrcbin (is DeepStream installed?)\n");
+    return NULL;
   }
 
-  g_object_set(G_OBJECT(uridecodebin), "uri", uri, NULL);
+  g_object_set(G_OBJECT(nvurisrcbin),
+               "uri",             uri,
+               "gpu-id",          app_config.gpu_id,
+               "cudadec-memtype", 0,
+               NULL);
 
-  g_signal_connect(G_OBJECT(uridecodebin), "pad-added",
-                   G_CALLBACK(uridecodebin_pad_added_callback), ctx);
-  g_signal_connect(G_OBJECT(uridecodebin), "child-added",
+  if (g_strrstr(uri, "rtsp://")) {
+    //configure_source_for_ntp_sync(nvurisrcbin); // Source element type nvurisrcbin is not supported
+
+    // set reconection properties for RTSP sources
+    g_object_set(G_OBJECT(nvurisrcbin),
+                 "rtsp-reconnect-interval", 15, // Reconnect every 15 seconds
+                 "rtsp-reconnect-attempts", -1, // Retry indefinitely
+                  NULL);
+  }
+
+  g_signal_connect(G_OBJECT(nvurisrcbin), "pad-added",
+                   G_CALLBACK(nvurisrcbin_pad_added_callback), ctx);
+  g_signal_connect(G_OBJECT(nvurisrcbin), "child-added",
                    G_CALLBACK(uridecodebin_child_added_callback), NULL);
 
-  return uridecodebin;
+  return nvurisrcbin;
 }
 
 // =============================================================================
@@ -157,6 +250,7 @@ create_app_pipeline(GMainLoop *loop, GCallback appsink_callback,
                     PipelineMonitor *monitor)
 {
   AppPipeline *ap = g_new0(AppPipeline, 1);
+  ap->loop = loop;
 
   // ---------------------------------------------------------------------------
   // Pipeline
@@ -177,6 +271,7 @@ create_app_pipeline(GMainLoop *loop, GCallback appsink_callback,
   // ---------------------------------------------------------------------------
   // Source bins (one per URI) + optional per-source raw capture branch
   ap->num_sources    = app_config.source.count;
+  ap->src_bins       = g_new0(GstElement *, ap->num_sources);
   ap->src_tees       = g_new0(GstElement *, ap->num_sources);
   ap->src_nvvidconvs = g_new0(GstElement *, ap->num_sources);
   ap->src_capsfilters= g_new0(GstElement *, ap->num_sources);
@@ -292,18 +387,19 @@ create_app_pipeline(GMainLoop *loop, GCallback appsink_callback,
       /* mux_sink_pad already consumed and cleared above */
 
     } else {
-      /* Direct link: uridecodebin decoded pad → nvstreammux (pad-added fires) */
+      /* Direct link: nvurisrcbin decoded pad → nvstreammux (pad-added fires) */
       ctx->tee = NULL;
       /* ctx->mux_sink_pad already set above; pad-added callback will use it */
     }
 
-    /* --- Create uridecodebin with SourceBinCtx as pad-added context --- */
-    GstElement *uridecodebin = create_uridecodebin(
+    /* --- Create nvurisrcbin with SourceBinCtx as pad-added context --- */
+    GstElement *nvurisrcbin = create_nvurisrcbin(
         i, app_config.source.uris[i], ctx);
-    if (!uridecodebin || !gst_bin_add(GST_BIN(ap->pipeline), uridecodebin)) {
-      g_printerr("ERROR - Failed to create uridecodebin for source %d\n", i);
+    if (!nvurisrcbin || !gst_bin_add(GST_BIN(ap->pipeline), nvurisrcbin)) {
+      g_printerr("ERROR - Failed to create nvurisrcbin for source %d\n", i);
       goto fail;
     }
+    ap->src_bins[i] = nvurisrcbin;
   }
 
   // ---------------------------------------------------------------------------
@@ -548,7 +644,7 @@ create_app_pipeline(GMainLoop *loop, GCallback appsink_callback,
   // Bus watch
   {
     GstBus *bus = gst_pipeline_get_bus(GST_PIPELINE(ap->pipeline));
-    ap->bus_watch_id = gst_bus_add_watch(bus, bus_call, loop);
+    ap->bus_watch_id = gst_bus_add_watch(bus, bus_call, ap);
     gst_object_unref(bus);
   }
 
@@ -592,6 +688,7 @@ fail:
   }
   g_list_free(ap->_src_ctxs);
 
+  g_free(ap->src_bins);
   g_free(ap->src_tees);
   g_free(ap->src_nvvidconvs);
   g_free(ap->src_capsfilters);
@@ -624,6 +721,7 @@ destroy_app_pipeline(AppPipeline *p)
   g_list_free(p->_src_ctxs);
 
   /* Free per-source element pointer arrays (elements are owned by pipeline) */
+  g_free(p->src_bins);
   g_free(p->src_tees);
   g_free(p->src_nvvidconvs);
   g_free(p->src_capsfilters);

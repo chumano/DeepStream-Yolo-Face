@@ -27,12 +27,15 @@
 - [x] handle frame with padding by nvstreammux 
   - frame image save exclude letterbox area (configurable)
   - bounding box need to be adjusted to ensure the correct position on the padded frame image
-- [ ] support save orginal frame image get directly from source (before the nvstreammux) (configurable)
+- [x] change uridecodebin to nvurisrcbin to support reconnition on RTSP stream with low latency
+   - https://docs.nvidia.com/metropolis/deepstream/7.1/text/DS_plugin_gst-nvurisrcbin.html
+- [x] support save orginal frame image get directly from source (before the nvstreammux) (configurable)
   - save when face detected (smart saving) or save all frames
   - buffered orginal frame image for a short period of time (e.g. 1 second)  and save the buffered image when face detected
   - support multi source inputs and save original frame image for each source
-- [ ] change uridecodebin to nvurisrcbin to support reconnition on RTSP stream with low latency
-   - https://docs.nvidia.com/metropolis/deepstream/7.1/text/DS_plugin_gst-nvurisrcbin.html
+- [ ] frame_buffer push raw frame data, then encode jpeg in buffer worker thread (currently push encoded jpeg data to frame_buffer)
+- [ ] feature smart recording with nvurisrcbin. trigger recording by face detection and save video clip/
+
 ```bash
 gst-launch-1.0 nvurisrcbin \
 uri=rtsp://100.64.0.153:8554/test! \

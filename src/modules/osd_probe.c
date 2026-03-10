@@ -200,7 +200,7 @@ nvosd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_da
     
     GstClockTime pts = frame_meta->buf_pts;
 
-    g_print("[osd] stream %d==%d, frame %d, org size [%d X %d],  streammux size [%d X %d], letterbox [%d X %d], pad [%d, %d], scale %.2f, PTS=%" GST_TIME_FORMAT ", NTP=%s\n",
+    GST_DEBUG("[osd] stream %d==%d, frame %d, org size [%d X %d],  streammux size [%d X %d], letterbox [%d X %d], pad [%d, %d], scale %.2f, PTS=%" GST_TIME_FORMAT ", NTP=%s\n",
             frame_meta->source_id,
             frame_meta->pad_index,
             frame_meta->frame_num,

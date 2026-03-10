@@ -72,6 +72,16 @@ typedef struct {
 
   /** @private Internal list of heap-allocated SourceBinCtx objects */
   GList *_src_ctxs;
+
+  /**
+   * Array of nvurisrcbin elements (one per source).
+   * Kept so that the bus-error handler can restart a failing source bin
+   * on RTSP disconnect/reconnect events.  Length == num_sources.
+   */
+  GstElement **src_bins;
+
+  /** GMainLoop stored here so bus_call can quit it on fatal errors. */
+  GMainLoop *loop;
 } AppPipeline;
 
 

@@ -118,7 +118,7 @@ AppConfig app_config = {
     .quality                = 70,
     .exclude_letterbox      = TRUE,
     .save_all_frames        = FALSE,
-    .pre_buffer_duration_sec = 1.0,
+    .pre_buffer_duration_sec = 5.0,
   },
 
   /* JSON save */

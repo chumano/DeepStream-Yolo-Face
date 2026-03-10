@@ -64,14 +64,21 @@ void frame_buffer_push(FrameBuffer *fb, guint source_id, guint frame_num,
 void frame_buffer_prune(FrameBuffer *fb, guint source_id, gdouble current_time);
 
 /**
- * Write all currently buffered frames for @source_id to disk and clear the
- * buffer.  Files are written to:
+ * Enqueue an async save task for @source_id at @pts_sec.
+ *
+ * This function returns immediately after placing the request on an internal
+ * work queue.  A background worker thread picks up the task and:
+ *   - saves frame(s) whose timestamp matches @pts_sec (within 1 ms) to disk,
+ *   - discards all buffered frames with timestamp <= @pts_sec.
+ *
+ * Files are written to:
  *   {save_dir}/source_{source_id}/frame_src{source_id}_num{frame_num}_prebuf_{ts}.jpg
  *
  * @param fb        FrameBuffer instance
  * @param source_id Source index
+ * @param pts_sec   Detection frame PTS in seconds
  */
-void frame_buffer_flush_to_disk(FrameBuffer *fb, guint source_id);
+void frame_buffer_save_frame(FrameBuffer *fb, guint source_id, gdouble pts_sec);
 
 #ifdef __cplusplus
 }

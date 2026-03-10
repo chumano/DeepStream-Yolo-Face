@@ -1,6 +1,7 @@
 #include "utils.h"
 #include <time.h>
 #include <string.h>
+#include <stdio.h>
 
 #define MIN(a,b) ((a)<(b)?(a):(b))
 
@@ -34,4 +35,22 @@ format_ntp_timestamp(guint64 ntp_ns, gchar *buf, gsize buf_size)
   gint millisec = (gint)((timestamp_sec - (gdouble)timestamp_time) * 1000);
 
   g_snprintf(buf, buf_size, "%s.%03d", timestamp_str, millisec);
+}
+
+gchar *
+frame_filename_new_infer(guint source_id, guint frame_num,
+                         gboolean infer_done, gdouble timestamp_sec)
+{
+  guint64 ts_us = (guint64)(timestamp_sec * 1e6);
+
+  return g_strdup_printf("frame_src%02u_num%06u_infer%d_%012" G_GINT64_FORMAT "us.jpg",
+                         source_id, frame_num, infer_done ? 1 : 0, ts_us);
+}
+
+gchar *
+frame_filename_new_prebuf(guint source_id, guint frame_num, gdouble timestamp_sec)
+{
+  guint64 ts_us = (guint64)(timestamp_sec * 1e6);
+  return g_strdup_printf("frame_src%02u_num%06u_%012" G_GUINT64_FORMAT "us.jpg",
+                         source_id, frame_num, ts_us);
 }

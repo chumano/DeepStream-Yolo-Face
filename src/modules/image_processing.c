@@ -377,8 +377,10 @@ build_frame_output_paths(NvDsFrameMeta *frame_meta, const gchar *base_output_dir
   guint    source_id = frame_meta->source_id;
   guint    frame_num = frame_meta->frame_num;
   gboolean infer_ok  = frame_meta->bInferDone;
+  // use pts
+  gdouble pts_sec = (gdouble) frame_meta->buf_pts / GST_SECOND;
 
-  gchar *rel_dir = g_strdup_printf("source_%u", source_id);
+  gchar *rel_dir = g_strdup_printf("source_%02u", source_id);
   gchar *abs_dir = g_strdup_printf("%s/%s", base_output_dir, rel_dir);
 
   if (!ensure_frame_save_directory(abs_dir)) {
@@ -388,13 +390,7 @@ build_frame_output_paths(NvDsFrameMeta *frame_meta, const gchar *base_output_dir
     return FALSE;
   }
 
-  GDateTime *now       = g_date_time_new_now_local();
-  gchar     *timestamp = g_date_time_format(now, "%Y%m%d_%H%M%S");
-  g_date_time_unref(now);
-
-  gchar *filename = g_strdup_printf("frame_src%u_num%u_%d_%s.jpg",
-                                    source_id, frame_num, infer_ok, timestamp);
-  g_free(timestamp);
+  gchar *filename = frame_filename_new_infer(source_id, frame_num, infer_ok, pts_sec);
 
   *rel_path = g_strdup_printf("%s/%s", rel_dir, filename);
   *abs_path = g_strdup_printf("%s/%s", abs_dir, filename);

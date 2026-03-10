@@ -96,13 +96,14 @@ raw_src_appsink_callback(GstElement *appsink, gpointer user_data)
 
   GstClockTime ntp = (meta) ? meta->timestamp : GST_CLOCK_TIME_NONE;
 
-  g_print("[raw-tee] src=%u frame=%u PTS=%" GST_TIME_FORMAT " DTS=%" GST_TIME_FORMAT " NTP=%" GST_TIME_FORMAT "\n",
+  GST_DEBUG("[raw-tee] src=%u frame=%u PTS=%" GST_TIME_FORMAT " DTS=%" GST_TIME_FORMAT " NTP=%" GST_TIME_FORMAT "\n",
           source_id, raw_src_frame_counters[source_id] + 1, 
           GST_TIME_ARGS(pts), 
           GST_TIME_ARGS(dts),
           GST_TIME_ARGS(ntp));
 
 
+  // Convert to seconds with fallback
   gdouble timestamp = (pts != GST_CLOCK_TIME_NONE)
                       ? (gdouble)pts / 1e9
                       : get_current_time();
@@ -522,10 +523,14 @@ appsink_new_sample_callback(GstElement *appsink, gpointer user_data)
         && frame_buffer
         && frame_meta->obj_meta_list != NULL
         && frame_meta->num_obj_meta > 0) {
+      GstClockTime pts = frame_meta->buf_pts;
+      gdouble detection_pts_sec = (gdouble) pts / GST_SECOND;
+                                    
+      GST_INFO("[detection] Detection on src=%u frame=%u: flushed pre-buffer pts=%f",
+                frame_meta->source_id, frame_meta->frame_num, detection_pts_sec);
+      
       // trigger save frame
-      frame_buffer_flush_to_disk(frame_buffer, frame_meta->source_id); //frame_meta->frame_num
-      GST_DEBUG("[raw-tee] Detection on src=%u frame=%u: flushed pre-buffer",
-                frame_meta->source_id, frame_meta->frame_num);
+      frame_buffer_save_frame(frame_buffer, frame_meta->source_id, detection_pts_sec);
     }
     
     // Process each object in frame
