@@ -80,6 +80,29 @@ void frame_buffer_prune(FrameBuffer *fb, guint source_id, gdouble current_time);
  */
 void frame_buffer_save_frame(FrameBuffer *fb, guint source_id, gdouble pts_sec);
 
+/**
+ * Log current frame-buffer metrics for all sources via GST_INFO.
+ *
+ * Prints per-source stats (frames in ring buffer, memory used in KB,
+ * total pushed/saved/pruned) plus aggregate totals and the save-queue
+ * length.  Safe to call from any thread.
+ */
+void frame_buffer_log_metrics(FrameBuffer *fb);
+
+/**
+ * Change the interval at which metrics are automatically logged.
+ *
+ * The background metrics thread wakes every @interval_sec seconds and
+ * calls frame_buffer_log_metrics().  Pass 0 to disable periodic logging
+ * (manual calls to frame_buffer_log_metrics() still work).
+ *
+ * Default: 30 seconds.
+ *
+ * @param fb           FrameBuffer instance
+ * @param interval_sec Logging interval in seconds (0 = disable)
+ */
+void frame_buffer_set_metrics_interval(FrameBuffer *fb, guint interval_sec);
+
 #ifdef __cplusplus
 }
 #endif

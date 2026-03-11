@@ -24,6 +24,9 @@ typedef struct {
   GQueue  *frames;     /**< queue<BufferedFrame *>, head = newest */
   GMutex   mutex;
   guint    source_id;
+  guint64  total_pushed;   /**< total frames ever pushed (protected by mutex) */
+  guint64  total_saved;    /**< total frames written to disk (protected by mutex) */
+  guint64  total_pruned;   /**< total frames expired/pruned (protected by mutex) */
 } SourceBuffer;
 
 /** Task pushed onto the async save queue by frame_buffer_save_frame(). */
@@ -51,6 +54,13 @@ struct _FrameBuffer {
   /* Async save worker */
   GAsyncQueue   *save_queue;           /**< thread-safe task queue */
   GThread       *worker_thread;        /**< background save thread */
+
+  /* Metrics timer */
+  guint          metrics_interval_sec; /**< print interval in seconds; 0 = disabled */
+  GThread       *metrics_thread;       /**< background metrics thread */
+  GMutex         metrics_mutex;
+  GCond          metrics_cond;
+  gboolean       metrics_stop;         /**< TRUE signals the thread to exit */
 };
 
 // =============================================================================
@@ -165,6 +175,7 @@ worker_execute_save(FrameBuffer *fb, const SaveTask *task)
             GST_DEBUG("frame_buffer: [async] saved pts-matched frame src=%u num=%u pts=%.6f -> %s",
                       source_id, f->frame_num, f->timestamp, abs_path);
             flushed++;
+            sb->total_saved++;
           } else {
             GST_WARNING("frame_buffer: [async] failed to open %s for writing", abs_path);
           }
@@ -227,6 +238,105 @@ worker_thread_func(gpointer user_data)
 }
 
 // =============================================================================
+// Metrics
+// =============================================================================
+
+void
+frame_buffer_log_metrics(FrameBuffer *fb)
+{
+  if (!fb)
+    return;
+
+  guint64 total_pushed = 0;
+  guint64 total_saved  = 0;
+  guint64 total_pruned = 0;
+  guint   total_queued = 0;
+  gsize   total_bytes  = 0;
+
+  GST_INFO("frame_buffer: === metrics (sources=%u, interval=%us) ===",
+           fb->num_sources, fb->metrics_interval_sec);
+
+  for (guint i = 0; i < fb->num_sources; i++) {
+    SourceBuffer *sb = &fb->sources[i];
+    g_mutex_lock(&sb->mutex);
+
+    guint in_buf = g_queue_get_length(sb->frames);
+    gsize bytes  = 0;
+    for (GList *l = sb->frames->head; l; l = l->next) {
+      BufferedFrame *f = (BufferedFrame *)l->data;
+      bytes += f->jpeg_size;
+    }
+
+    GST_INFO("frame_buffer:   src=%u  in_buf=%u  mem=%.1fKB"
+             "  pushed=%" G_GUINT64_FORMAT
+             "  saved=%" G_GUINT64_FORMAT
+             "  pruned=%" G_GUINT64_FORMAT,
+             i, in_buf, (gdouble)bytes / 1024.0,
+             sb->total_pushed, sb->total_saved, sb->total_pruned);
+
+    total_pushed += sb->total_pushed;
+    total_saved  += sb->total_saved;
+    total_pruned += sb->total_pruned;
+    total_queued += in_buf;
+    total_bytes  += bytes;
+    g_mutex_unlock(&sb->mutex);
+  }
+
+  gint queue_len = fb->save_queue ? g_async_queue_length(fb->save_queue) : 0;
+  GST_INFO("frame_buffer: --- total  in_buf=%u  mem=%.1fKB"
+           "  pushed=%" G_GUINT64_FORMAT
+           "  saved=%" G_GUINT64_FORMAT
+           "  pruned=%" G_GUINT64_FORMAT
+           "  save_queue=%d ---",
+           total_queued, (gdouble)total_bytes / 1024.0,
+           total_pushed, total_saved, total_pruned, queue_len);
+}
+
+static gpointer
+metrics_thread_func(gpointer user_data)
+{
+  FrameBuffer *fb = (FrameBuffer *)user_data;
+
+  GST_INFO("frame_buffer: metrics thread started (interval=%us)",
+           fb->metrics_interval_sec);
+
+  g_mutex_lock(&fb->metrics_mutex);
+  while (!fb->metrics_stop) {
+    guint interval = fb->metrics_interval_sec;
+    if (interval == 0) {
+      /* Disabled — block until interval changes or stop is requested */
+      g_cond_wait(&fb->metrics_cond, &fb->metrics_mutex);
+      continue;
+    }
+
+    gint64 deadline =
+        g_get_monotonic_time() + (gint64)interval * G_USEC_PER_SEC;
+    g_cond_wait_until(&fb->metrics_cond, &fb->metrics_mutex, deadline);
+
+    if (!fb->metrics_stop && fb->metrics_interval_sec > 0)
+      frame_buffer_log_metrics(fb);
+  }
+  g_mutex_unlock(&fb->metrics_mutex);
+
+  GST_INFO("frame_buffer: metrics thread stopped");
+  return NULL;
+}
+
+void
+frame_buffer_set_metrics_interval(FrameBuffer *fb, guint interval_sec)
+{
+  if (!fb)
+    return;
+
+  g_mutex_lock(&fb->metrics_mutex);
+  fb->metrics_interval_sec = interval_sec;
+  g_cond_signal(&fb->metrics_cond);   /* wake thread to pick up new interval */
+  g_mutex_unlock(&fb->metrics_mutex);
+
+  GST_INFO("frame_buffer: metrics interval set to %us", interval_sec);
+}
+
+// =============================================================================
 // Public API
 // =============================================================================
 
@@ -255,6 +365,13 @@ frame_buffer_new(guint num_sources, gdouble pre_buffer_duration_sec,
   fb->save_queue     = g_async_queue_new();
   fb->worker_thread  = g_thread_new("fb-save-worker", worker_thread_func, fb);
 
+  /* Start metrics timer thread (default interval: 30 s) */
+  fb->metrics_interval_sec = 30;
+  fb->metrics_stop         = FALSE;
+  g_mutex_init(&fb->metrics_mutex);
+  g_cond_init(&fb->metrics_cond);
+  fb->metrics_thread = g_thread_new("fb-metrics", metrics_thread_func, fb);
+
   GST_INFO("frame_buffer: created (sources=%u, pre_buffer=%.2fs, dir=%s)",
            num_sources, pre_buffer_duration_sec, save_dir);
   return fb;
@@ -265,6 +382,18 @@ frame_buffer_free(FrameBuffer *fb)
 {
   if (!fb)
     return;
+
+  /* Stop the metrics timer thread */
+  if (fb->metrics_thread) {
+    g_mutex_lock(&fb->metrics_mutex);
+    fb->metrics_stop = TRUE;
+    g_cond_signal(&fb->metrics_cond);
+    g_mutex_unlock(&fb->metrics_mutex);
+    g_thread_join(fb->metrics_thread);
+    fb->metrics_thread = NULL;
+    g_mutex_clear(&fb->metrics_mutex);
+    g_cond_clear(&fb->metrics_cond);
+  }
 
   /* Signal the worker thread to stop and wait for it to finish */
   if (fb->worker_thread) {
@@ -320,6 +449,7 @@ frame_buffer_push(FrameBuffer *fb, guint source_id, guint frame_num,
   SourceBuffer *sb = &fb->sources[source_id];
   g_mutex_lock(&sb->mutex);
   g_queue_push_head(sb->frames, f);  /* head = newest */
+  sb->total_pushed++;
   g_mutex_unlock(&sb->mutex);
 }
 
@@ -339,6 +469,7 @@ frame_buffer_prune(FrameBuffer *fb, guint source_id, gdouble current_time)
     if (tail->timestamp < cutoff) {
       g_queue_pop_tail(sb->frames);
       buffered_frame_free(tail);
+      sb->total_pruned++;
     } else {
       break;
     }

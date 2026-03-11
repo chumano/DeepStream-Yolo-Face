@@ -102,6 +102,7 @@ typedef struct {
  */
 AppPipeline *create_app_pipeline(GMainLoop       *loop,
                                  GCallback        appsink_callback,
+                                 GCallback        sr_done_callback,
                                  PipelineMonitor *monitor);
 
 /**

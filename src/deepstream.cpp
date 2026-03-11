@@ -2,6 +2,7 @@
 #include <jpeglib.h>
 #include <sys/stat.h>
 #include <string.h>
+#include <gst-nvdssr.h>
 
 //  modules
 #include "modules/config.h"
@@ -164,6 +165,49 @@ raw_src_appsink_callback(GstElement *appsink, gpointer user_data)
   gst_buffer_unmap(buf, &map_info);
   gst_sample_unref(sample);
   return GST_FLOW_OK;
+}
+
+
+// =============================================================================
+// Smart Record callback
+// =============================================================================
+
+/**
+ * Called by nvurisrcbin when a smart-recording session finishes writing.
+ *
+ * @user_data  source index passed as GUINT_TO_POINTER(stream_id)
+ *
+ * Logs the completed recording and prints a visible confirmation line.
+ * Extend here to trigger post-processing, move the file, or publish a
+ * notification.
+ */
+static void
+sr_done_callback(GstElement *src, NvDsSRRecordingInfo *info, gpointer user_data)
+{
+  guint stream_id = GPOINTER_TO_UINT(user_data);
+
+  if (!info) {
+    GST_WARNING("[smart-record] sr-done fired for src=%u but info is NULL", stream_id);
+    return;
+  }
+
+  gchar *full_path = (info->dirpath && info->filename)
+                     ? g_strdup_printf("%s/%s", info->dirpath, info->filename)
+                     : g_strdup(info->filename ? info->filename : "(unknown)");
+
+  GST_INFO("[smart-record] Recording done: src=%u sessionId=%u file=%s "
+           "duration=%.2fs container=%u %ux%u",
+           stream_id,
+           info->sessionId,
+           full_path,
+           (gdouble)info->duration / 1000.0,
+           info->containerType,
+           info->width, info->height);
+
+  g_print("[smart-record] Saved: %s (%.2f s)\n",
+          full_path, (gdouble)info->duration / 1000.0);
+
+  g_free(full_path);
 }
 
 // =============================================================================
@@ -809,6 +853,7 @@ main(gint argc, char *argv[])
   AppPipeline *ap = create_app_pipeline(
       loop,
       G_CALLBACK(appsink_new_sample_callback),
+      G_CALLBACK(sr_done_callback),
       pipeline_monitor);
   if (!ap) {
     g_printerr("ERROR - Failed to create pipeline\n");
@@ -830,12 +875,21 @@ main(gint argc, char *argv[])
 
   // ===============================================
   // Start the pipeline
+  // Go directly to PLAYING — do NOT call GST_STATE_PAUSED first.
+  // For live sources (RTSP + nvstreammux) an explicit PAUSED transition forces
+  // a preroll that can block indefinitely when sources are not yet ready.
+  // GStreamer automatically traverses NULL→READY→PAUSED→PLAYING internally.
   GST_INFO("Starting GStreamer pipeline...\n");
-  gst_element_set_state(ap->pipeline, GST_STATE_PAUSED);
-
-  if (gst_element_set_state(ap->pipeline, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
-    g_printerr("ERROR - Failed to set pipeline to playing\n");
-    return -1;
+  {
+    GstStateChangeReturn sc_ret =
+        gst_element_set_state(ap->pipeline, GST_STATE_PLAYING);
+    if (sc_ret == GST_STATE_CHANGE_FAILURE) {
+      g_printerr("ERROR - Failed to set pipeline to playing\n");
+      return -1;
+    }
+    if (sc_ret == GST_STATE_CHANGE_ASYNC) {
+      GST_INFO("Pipeline state change is async (normal for live sources)\n");
+    }
   }
 
   /* Dump all pipeline elements + properties to a JSON file for inspection */

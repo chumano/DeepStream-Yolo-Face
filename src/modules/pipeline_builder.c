@@ -3,6 +3,7 @@
 #include <nvdsgstutils.h>
 #include <nvbufsurface.h>
 #include "gstnvdsmeta.h"
+#include <gst-nvdssr.h>
 
 #include "config.h"
 #include "osd_probe.h"
@@ -206,7 +207,8 @@ nvurisrcbin_pad_added_callback(GstElement *srcbin, GstPad *pad,
 }
 
 static GstElement *
-create_nvurisrcbin(guint stream_id, const gchar *uri, SourceBinCtx *ctx)
+create_nvurisrcbin(guint stream_id, const gchar *uri, SourceBinCtx *ctx,
+                   GCallback sr_done_callback)
 {
   gchar bin_name[32] = {};
   g_snprintf(bin_name, 32, "source-bin-%04d", stream_id);
@@ -256,6 +258,13 @@ create_nvurisrcbin(guint stream_id, const gchar *uri, SourceBinCtx *ctx)
   g_signal_connect(G_OBJECT(nvurisrcbin), "child-added",
                    G_CALLBACK(uridecodebin_child_added_callback), NULL);
 
+  /* Connect sr-done to be notified when a smart-recording session finishes */
+  if (app_config.smart_record.enabled && sr_done_callback) {
+    g_signal_connect(G_OBJECT(nvurisrcbin), "sr-done",
+                     sr_done_callback,
+                     GUINT_TO_POINTER(stream_id));
+  }
+
   return nvurisrcbin;
 }
 
@@ -265,7 +274,7 @@ create_nvurisrcbin(guint stream_id, const gchar *uri, SourceBinCtx *ctx)
 
 AppPipeline *
 create_app_pipeline(GMainLoop *loop, GCallback appsink_callback,
-                    PipelineMonitor *monitor)
+                    GCallback sr_done_callback, PipelineMonitor *monitor)
 {
   AppPipeline *ap = g_new0(AppPipeline, 1);
   ap->loop = loop;
@@ -448,7 +457,7 @@ create_app_pipeline(GMainLoop *loop, GCallback appsink_callback,
 
     /* --- Create nvurisrcbin with SourceBinCtx as pad-added context --- */
     GstElement *nvurisrcbin = create_nvurisrcbin(
-        i, app_config.source.uris[i], ctx);
+        i, app_config.source.uris[i], ctx, sr_done_callback);
     if (!nvurisrcbin || !gst_bin_add(GST_BIN(ap->pipeline), nvurisrcbin)) {
       g_printerr("ERROR - Failed to create nvurisrcbin for source %d\n", i);
       goto fail;
