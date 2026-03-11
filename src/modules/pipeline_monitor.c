@@ -65,6 +65,11 @@ struct _PipelineMonitor {
   gulong             queue_sink_probe_id [PIPELINE_MONITOR_MAX_ELEMENTS]; /* sink pad probe */
   gulong             queue_src_probe_id  [PIPELINE_MONITOR_MAX_ELEMENTS]; /* src  pad probe */
 
+  /* rtspsrc elements – polled for "stats" GstStructure */
+  guint       num_rtspsrc;
+  gchar      *rtspsrc_names [PIPELINE_MONITOR_MAX_SOURCES];
+  GstElement *rtspsrc_elems [PIPELINE_MONITOR_MAX_SOURCES];
+
   /* Latency ring buffer (lock) */
   PipelineLatencyTracker latency;
 
@@ -222,6 +227,10 @@ pipeline_monitor_new(guint report_interval_sec, guint num_sources)
   memset(m->quality_score_sum,  0, sizeof(m->quality_score_sum));
   memset(&m->latency,           0, sizeof(PipelineLatencyTracker));
 
+  m->num_rtspsrc = 0;
+  memset(m->rtspsrc_names, 0, sizeof(m->rtspsrc_names));
+  memset(m->rtspsrc_elems, 0, sizeof(m->rtspsrc_elems));
+
   g_get_current_time(&m->start_time);
 
   if (report_interval_sec > 0) {
@@ -270,6 +279,15 @@ pipeline_monitor_free(PipelineMonitor *monitor)
         monitor->queue_src_probe_id[i] = 0;
       }
       gst_object_unref(monitor->queue_elems[i]);
+    }
+  }
+
+  // free rtspsrc names and unref elements
+  for (guint i = 0; i < PIPELINE_MONITOR_MAX_SOURCES; i++) {
+    g_free(monitor->rtspsrc_names[i]);
+    if (monitor->rtspsrc_elems[i]) {
+      gst_object_unref(monitor->rtspsrc_elems[i]);
+      monitor->rtspsrc_elems[i] = NULL;
     }
   }
 
@@ -343,6 +361,37 @@ pipeline_monitor_add_queue(PipelineMonitor *monitor,
             name, monitor->queue_signal_ids[idx],
             monitor->queue_sink_probe_id[idx],
             monitor->queue_src_probe_id[idx]);
+}
+
+void
+pipeline_monitor_add_rtspsrc(PipelineMonitor *monitor,
+                             guint            source_id,
+                             const gchar     *name,
+                             GstElement      *element)
+{
+  g_return_if_fail(monitor != NULL);
+  g_return_if_fail(name    != NULL);
+  g_return_if_fail(element != NULL);
+  g_return_if_fail(source_id < PIPELINE_MONITOR_MAX_SOURCES);
+
+  g_mutex_lock(&monitor->lock);
+
+  if (monitor->rtspsrc_elems[source_id]) {
+    GST_WARNING("PipelineMonitor: rtspsrc slot %u already occupied, replacing", source_id);
+    gst_object_unref(monitor->rtspsrc_elems[source_id]);
+    g_free(monitor->rtspsrc_names[source_id]);
+  }
+
+  monitor->rtspsrc_names[source_id] = g_strdup(name);
+  monitor->rtspsrc_elems[source_id] = gst_object_ref(element);
+
+  /* Track how many unique rtspsrc slots are in use */
+  if (source_id >= monitor->num_rtspsrc)
+    monitor->num_rtspsrc = source_id + 1;
+
+  g_mutex_unlock(&monitor->lock);
+
+  GST_DEBUG("PipelineMonitor: registered rtspsrc '%s' for source %u", name, source_id);
 }
 
 void
@@ -522,6 +571,60 @@ pipeline_monitor_snapshot(PipelineMonitor         *monitor,
     }
   }
 
+  /* rtspsrc stats – rtspsrc is a GstBin; iterate recursively to find all
+   * rtpjitterbuffer children and aggregate their "stats" GstStructure.
+   * All integer fields on rtpjitterbuffer::stats are guint64.
+   * g_object_get / gst_bin_iterate_recurse are thread-safe on GstElement. */
+  out->num_rtspsrc = monitor->num_rtspsrc;
+  for (guint i = 0; i < monitor->num_rtspsrc; i++) {
+    GstElement *src = monitor->rtspsrc_elems[i];
+    if (!src) continue;
+
+    PipelineRtspStats *rs = &out->rtsp_stats[i];
+    memset(rs, 0, sizeof(*rs));
+
+    guint   jb_count = 0;
+    guint64 jitter_sum = 0;
+
+    GstIterator *iter = gst_bin_iterate_recurse(GST_BIN(src));
+    GValue item = G_VALUE_INIT;
+    GstIteratorResult res;
+
+    while ((res = gst_iterator_next(iter, &item)) == GST_ITERATOR_OK) {
+      GstElement *child = GST_ELEMENT(g_value_get_object(&item));
+      GstElementFactory *fac = gst_element_get_factory(child);
+
+      if (fac && g_strcmp0(gst_plugin_feature_get_name(
+              GST_PLUGIN_FEATURE(fac)), "rtpjitterbuffer") == 0) {
+
+        GstStructure *jb_stats = NULL;
+        g_object_get(child, "stats", &jb_stats, NULL);
+
+        if (jb_stats) {
+          guint64 v = 0;
+          gdouble d = 0.0;
+          if (gst_structure_get_uint64(jb_stats, "num-pushed",        &v)) rs->num_pushed        += v;
+          if (gst_structure_get_uint64(jb_stats, "num-lost",          &v)) rs->num_lost          += v;
+          if (gst_structure_get_uint64(jb_stats, "num-late",          &v)) rs->num_late          += v;
+          if (gst_structure_get_uint64(jb_stats, "num-duplicates",    &v)) rs->num_duplicates    += v;
+          if (gst_structure_get_uint64(jb_stats, "avg-jitter",        &v)) jitter_sum            += v;
+          if (gst_structure_get_uint64(jb_stats, "rtx-count",         &v)) rs->rtx_count         += v;
+          if (gst_structure_get_uint64(jb_stats, "rtx-success-count", &v)) rs->rtx_success_count += v;
+          if (gst_structure_get_double(jb_stats, "rtx-rtt",           &d)) rs->rtx_rtt            = d;
+          gst_structure_free(jb_stats);
+          jb_count++;
+        }
+      }
+      g_value_unset(&item);
+    }
+    gst_iterator_free(iter);
+
+    if (jb_count > 0) {
+      rs->avg_jitter_ns = jitter_sum / jb_count; /* mean across jitterbuffers */
+      rs->valid = TRUE;
+    }
+  }
+
   g_mutex_unlock(&monitor->lock);
 }
 
@@ -644,6 +747,41 @@ pipeline_monitor_print_report(PipelineMonitor *monitor)
               qm->buffers_dropped, drop_pct);
     }
     g_print("╠══════════════════════════════════════════════════════════════╣\n");
+  }
+
+  /* RTSP source stats */
+  if (snap.num_rtspsrc > 0) {
+    gboolean any_valid = FALSE;
+    for (guint i = 0; i < snap.num_rtspsrc; i++) {
+      if (snap.rtsp_stats[i].valid) { any_valid = TRUE; break; }
+    }
+    if (any_valid) {
+      g_print("╠══════════════════════════════════════════════════════════════╣\n");
+      g_print("║  RTSP SOURCE STATS                                           \n");
+      g_print("║  %-10s  %8s  %6s  %6s  %6s  %10s  %8s/%8s  %8s\n",
+              "Source", "Pushed", "Lost", "Late", "Dups",
+              "Jitter(ms)", "RTX", "RTX-ok", "RTT(ms)");
+      for (guint i = 0; i < snap.num_rtspsrc; i++) {
+        const PipelineRtspStats *rs = &snap.rtsp_stats[i];
+        if (!rs->valid) continue;
+        gdouble jitter_ms = (gdouble)rs->avg_jitter_ns / 1e6;
+        g_print("║  src[%2u]    %8"G_GUINT64_FORMAT"  %6"G_GUINT64_FORMAT
+                "  %6"G_GUINT64_FORMAT"  %6"G_GUINT64_FORMAT
+                "  %10.2f  %8"G_GUINT64_FORMAT"/%-8"G_GUINT64_FORMAT"  %8.2f\n",
+                i,
+                rs->num_pushed,
+                rs->num_lost,
+                rs->num_late,
+                rs->num_duplicates,
+                jitter_ms,
+                rs->rtx_count,
+                rs->rtx_success_count,
+                rs->rtx_rtt);
+      }
+    }else{
+      g_print("╠══════════════════════════════════════════════════════════════╣\n");
+      g_print("║  RTSP SOURCE STATS: no valid rtpjitterbuffer stats found     \n");
+    }
   }
 
   g_print("╚══════════════════════════════════════════════════════════════╝\n");

@@ -134,15 +134,15 @@ Element Properties:
   stats               : Various statistics
                         flags: readable
                         Boxed pointer of type "GstStructure"
-                                                          num-pushed: 0
-                                                            num-lost: 0
-                                                            num-late: 0
-                                                      num-duplicates: 0
-                                                          avg-jitter: 0
-                                                           rtx-count: 0
-                                                     rtx-success-count: 0
-                                                      rtx-per-packet: 0
-                                                             rtx-rtt: 0
+                                                          num-pushed: 0 Number of RTP packets successfully pushed downstream.
+                                                            num-lost: 0 Number of packets detected as lost (not received in time).
+                                                            num-late: 0 Number of packets that arrived too late to be useful.
+                                                      num-duplicates: 0 Number of duplicate packets received.
+                                                          avg-jitter: 0 Average network jitter (variation in packet arrival time).
+                                                           rtx-count: 0 Number of retransmission requests sent.
+                                                     rtx-success-count: 0 Number of retransmission requests that were successful.
+                                                      rtx-per-packet: 0 Average number of retransmission requests per packet
+                                                             rtx-rtt: 0 Round-trip time for retransmission requests (in ms).
 
   ts-offset           : Adjust buffer timestamps with offset in nanoseconds
                         flags: readable, writable

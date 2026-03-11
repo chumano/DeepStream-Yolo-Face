@@ -129,14 +129,38 @@ typedef struct {
   GstElement *tee;           /**< non-NULL when raw capture branch exists */
   GstPad     *mux_sink_pad;  /**< non-NULL when tee is NULL (direct mode) */
 } SourceBinCtx;
+
+/**
+ * Context for the recursive uridecodebin child-added callback.
+ * Each g_signal_connect_data call owns its own heap-allocated copy.
+ */
+typedef struct {
+  PipelineMonitor *monitor;    /**< may be NULL when monitor is not used */
+  guint            source_id;
+} ChildAddedCtx;
 static void
-uridecodebin_child_added_callback(GstChildProxy *child_proxy, GObject *object,
+uridecodebin_child_added_callback(GstChildProxy *child_proxy G_GNUC_UNUSED,
+                                   GObject *object,
                                    gchar *name, gpointer user_data)
 {
-  if (g_strrstr(name, "decodebin")) {
-    g_signal_connect(object, "child-added",
-                     G_CALLBACK(uridecodebin_child_added_callback), user_data);
-  } else if (g_strrstr(name, "nvv4l2decoder")) {
+  ChildAddedCtx *ctx = (ChildAddedCtx *) user_data;
+
+  /* 'name' is the GStreamer instance name (e.g. "src", "decodebin0"), which
+   * nvurisrcbin may change from the factory name.  Check both the instance
+   * name and the GObject type name so matching is robust regardless of how
+   * the internal element is named at runtime. */
+  const gchar *type_name = G_OBJECT_TYPE_NAME(object);
+
+  if (g_strrstr(name, "decodebin") || g_strrstr(type_name, "DecodeBin")) {
+    /* Propagate context into deeper decodebin children; each connection
+     * owns its own copy so g_free is the destroy notify. */
+    ChildAddedCtx *rctx = g_new(ChildAddedCtx, 1);
+    rctx->monitor   = ctx ? ctx->monitor   : NULL;
+    rctx->source_id = ctx ? ctx->source_id : 0;
+    g_signal_connect_data(object, "child-added",
+                          G_CALLBACK(uridecodebin_child_added_callback),
+                          rctx, (GClosureNotify) g_free, 0);
+  } else if (g_strrstr(name, "nvv4l2decoder") || g_strrstr(type_name, "NvV4l2")) {
     g_object_set(object, "drop-frame-interval", 0,
                  "num-extra-surfaces", 1, "qos", 0, NULL);
     if (app_config.jetson) {
@@ -145,7 +169,7 @@ uridecodebin_child_added_callback(GstChildProxy *child_proxy, GObject *object,
       g_object_set(object, "cudadec-memtype", 0,
                    "gpu-id", app_config.gpu_id, NULL);
     }
-  } else if (g_strrstr(name, "rtspsrc")) {
+  } else if (g_strrstr(name, "rtspsrc") || g_strrstr(type_name, "RTSPSrc")) {
     /*
      * Tune the rtspsrc element for resilient RTSP reconnection:
      *   do-rtsp-keep-alive FALSE — suppress periodic keep-alive RTSP OPTIONS
@@ -165,6 +189,17 @@ uridecodebin_child_added_callback(GstChildProxy *child_proxy, GObject *object,
     //              "tcp-timeout",       (guint64) 5000000,  /* µs */
     //              "retry",             10,
     //              NULL);
+
+    /* Register with the pipeline monitor so RTSP/jitterbuffer stats
+     * are collected on every report interval. */
+    if (ctx && ctx->monitor) {
+      gchar mon_name[32];
+      g_snprintf(mon_name, sizeof(mon_name), "rtspsrc-%u", ctx->source_id);
+      pipeline_monitor_add_rtspsrc(ctx->monitor, ctx->source_id,
+                                   mon_name, GST_ELEMENT(object));
+      GST_INFO("pipeline_builder: registered rtspsrc '%s' (source %u) with monitor",
+               name, ctx->source_id);
+    }
   }
 }
 
@@ -208,7 +243,7 @@ nvurisrcbin_pad_added_callback(GstElement *srcbin, GstPad *pad,
 
 static GstElement *
 create_nvurisrcbin(guint stream_id, const gchar *uri, SourceBinCtx *ctx,
-                   GCallback sr_done_callback)
+                   GCallback sr_done_callback, PipelineMonitor *monitor)
 {
   gchar bin_name[32] = {};
   g_snprintf(bin_name, 32, "source-bin-%04d", stream_id);
@@ -255,8 +290,14 @@ create_nvurisrcbin(guint stream_id, const gchar *uri, SourceBinCtx *ctx,
 
   g_signal_connect(G_OBJECT(nvurisrcbin), "pad-added",
                    G_CALLBACK(nvurisrcbin_pad_added_callback), ctx);
-  g_signal_connect(G_OBJECT(nvurisrcbin), "child-added",
-                   G_CALLBACK(uridecodebin_child_added_callback), NULL);
+
+  /* Each connection owns its own ChildAddedCtx; destroyed via g_free. */
+  ChildAddedCtx *child_ctx = g_new(ChildAddedCtx, 1);
+  child_ctx->monitor   = monitor;
+  child_ctx->source_id = stream_id;
+  g_signal_connect_data(G_OBJECT(nvurisrcbin), "child-added",
+                        G_CALLBACK(uridecodebin_child_added_callback),
+                        child_ctx, (GClosureNotify) g_free, 0);
 
   /* Connect sr-done to be notified when a smart-recording session finishes */
   if (app_config.smart_record.enabled && sr_done_callback) {
@@ -457,7 +498,7 @@ create_app_pipeline(GMainLoop *loop, GCallback appsink_callback,
 
     /* --- Create nvurisrcbin with SourceBinCtx as pad-added context --- */
     GstElement *nvurisrcbin = create_nvurisrcbin(
-        i, app_config.source.uris[i], ctx, sr_done_callback);
+        i, app_config.source.uris[i], ctx, sr_done_callback, monitor);
     if (!nvurisrcbin || !gst_bin_add(GST_BIN(ap->pipeline), nvurisrcbin)) {
       g_printerr("ERROR - Failed to create nvurisrcbin for source %d\n", i);
       goto fail;

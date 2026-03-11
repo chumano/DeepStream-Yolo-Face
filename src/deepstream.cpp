@@ -309,6 +309,7 @@ process_object(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta, NvBufSurface
   if (!assess_face_quality(landmarks, num_landmarks, 
                            &is_good_face, &quality_score, &metrics)) {
     GST_DEBUG("Failed to assess face quality for object_id=%lu", obj_meta->object_id);
+    g_free(landmarks);
     return NULL;
   }
 
@@ -529,7 +530,9 @@ appsink_new_sample_callback(GstElement *appsink, gpointer user_data)
   
   if (!surface_valid) {
     GST_WARNING("Invalid surface");
-    surface = NULL;
+    gst_buffer_unmap(buf, &map_info);
+    gst_sample_unref(sample);
+    return GST_FLOW_OK;
   }
   
   // Process each frame in batch
@@ -636,7 +639,7 @@ appsink_new_sample_callback(GstElement *appsink, gpointer user_data)
           guint duration   = 0;   /* 0 → auto-stop after default-duration */
           guint32 sessId   = 0;   /* output: filled by nvurisrcbin start-sr */
           g_signal_emit_by_name(ap->src_bins[src_id], "start-sr",
-                                &sessId, start_time, duration, NULL);
+                                &sessId, start_time, duration, 2);
           /* Store the assigned session ID so it can be referenced later
            * (e.g. for stop-sr, deduplication, or Kafka events). */
           if (src_id < MAX_RAW_SOURCES)
@@ -792,6 +795,13 @@ log_parsed_config(void)
 gint
 main(gint argc, char *argv[])
 {
+  gint ret = 0;
+  GMainLoop *loop = NULL;
+  AppPipeline *ap = NULL;
+  gint current_device = -1;
+  struct cudaDeviceProp prop;
+  const gchar *dump_dir = "/app/outputs";
+
   // Initialize GStreamer and GST debug category before any GST_* logging
   gst_init(&argc, &argv);
   GST_DEBUG_CATEGORY_INIT(deepstream_debug_category, "deepstream", 0, "DeepStream Face App");
@@ -800,16 +810,13 @@ main(gint argc, char *argv[])
   // Parse command-line options
   if (!parse_command_line(argc, argv)) {
     g_printerr("ERROR - Failed to parse command-line options\n");
-    return -1;
+    ret = -1;
+    goto cleanup;
   }
    
   // Check if running on Jetson by querying CUDA device properties
-  gint current_device = -1;
   cudaGetDevice(&current_device);
- 
-  struct cudaDeviceProp prop;
   cudaGetDeviceProperties(&prop, current_device);
-
   if (prop.integrated) {
     app_config.jetson = TRUE;
   }
@@ -834,7 +841,8 @@ main(gint argc, char *argv[])
     
     if (!ensure_frame_save_directory(app_config.frame_save.dir)) {
       g_printerr("ERROR - Failed to create frame save directory: %s\n", app_config.frame_save.dir);
-      return -1;
+      ret = -1;
+      goto cleanup;
     }
     
     GST_INFO("Frame saving enabled: dir=%s, quality=%u", 
@@ -876,7 +884,7 @@ main(gint argc, char *argv[])
     }
   }
 
-  GMainLoop *loop = g_main_loop_new(NULL, FALSE);
+  loop = g_main_loop_new(NULL, FALSE);
 
   _intr_setup();
   g_timeout_add(400, check_for_interrupt, &loop);
@@ -889,14 +897,15 @@ main(gint argc, char *argv[])
   // ============================================================================
   // Create GStreamer pipeline
   GST_INFO("Creating GStreamer pipeline...");
-  AppPipeline *ap = create_app_pipeline(
+  ap = create_app_pipeline(
       loop,
       G_CALLBACK(appsink_new_sample_callback),
       G_CALLBACK(sr_done_callback),
       pipeline_monitor);
   if (!ap) {
     g_printerr("ERROR - Failed to create pipeline\n");
-    return -1;
+    ret = -1;
+    goto cleanup;
   }
 
   // ============================================================================
@@ -924,7 +933,8 @@ main(gint argc, char *argv[])
         gst_element_set_state(ap->pipeline, GST_STATE_PLAYING);
     if (sc_ret == GST_STATE_CHANGE_FAILURE) {
       g_printerr("ERROR - Failed to set pipeline to playing\n");
-      return -1;
+      ret = -1;
+      goto cleanup;
     }
     if (sc_ret == GST_STATE_CHANGE_ASYNC) {
       GST_INFO("Pipeline state change is async (normal for live sources)\n");
@@ -932,10 +942,7 @@ main(gint argc, char *argv[])
   }
 
   /* Dump all pipeline elements + properties to a JSON file for inspection */
-  {
-    const gchar *dump_dir = "/app/outputs";
-    dump_pipeline_elements_to_json(ap->pipeline, dump_dir);
-  }
+  dump_pipeline_elements_to_json(ap->pipeline, dump_dir);
 
   GST_DEBUG("\n");
 
@@ -949,19 +956,20 @@ main(gint argc, char *argv[])
   if (pipeline_monitor) {
     g_print("\n=== FINAL PIPELINE METRICS REPORT ===\n");
     pipeline_monitor_print_report(pipeline_monitor);
+  }
+
+cleanup:
+  if (pipeline_monitor) {
     pipeline_monitor_free(pipeline_monitor);
     pipeline_monitor = NULL;
   }
 
-  // ===============================================
   // Cleanup detection manager
   cleanup_detection_manager();
 
-  // ===============================================
   // Stop file cleanup timer
   file_cleanup_stop();
 
-  // ===============================================
   // Cleanup pre-detection frame buffer
   if (frame_buffer) {
     frame_buffer_free(frame_buffer);
@@ -969,8 +977,8 @@ main(gint argc, char *argv[])
   }
 
   config_free();
-  destroy_app_pipeline(ap);
-  g_main_loop_unref(loop);
+  if (ap) destroy_app_pipeline(ap);
+  if (loop) g_main_loop_unref(loop);
 
-  return 0;
+  return ret;
 }

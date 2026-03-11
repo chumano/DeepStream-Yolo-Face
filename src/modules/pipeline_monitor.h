@@ -42,6 +42,22 @@ typedef struct {
 } PipelineSourceStats;
 
 // =============================================================================
+// Per-source RTSP transport statistics (from rtspsrc "stats" property)
+// =============================================================================
+
+typedef struct {
+  gboolean  valid;               /**< TRUE when a rtspsrc was registered and jitterbuffer stats were found */
+  guint64   num_pushed;          /**< Packets pushed downstream by the jitterbuffer */
+  guint64   num_lost;            /**< Packets declared lost (sequence-number gap) */
+  guint64   num_late;            /**< Packets that arrived too late (discarded) */
+  guint64   num_duplicates;      /**< Duplicate packets discarded */
+  guint64   avg_jitter_ns;       /**< Average inter-arrival jitter (nanoseconds) */
+  guint64   rtx_count;           /**< Retransmission requests sent */
+  guint64   rtx_success_count;   /**< Retransmissions that recovered the packet */
+  gdouble   rtx_rtt;             /**< Round-trip time of last RTX request (ms) */
+} PipelineRtspStats;
+
+// =============================================================================
 // Element queue metrics
 // =============================================================================
 
@@ -87,6 +103,9 @@ typedef struct {
 
   guint              num_queues;
   PipelineQueueMetrics queues[PIPELINE_MONITOR_MAX_ELEMENTS];
+
+  guint              num_rtspsrc;
+  PipelineRtspStats  rtsp_stats[PIPELINE_MONITOR_MAX_SOURCES];
 
   gdouble            latency_min_ms;
   gdouble            latency_max_ms;
@@ -143,6 +162,23 @@ void pipeline_monitor_free(PipelineMonitor *monitor);
 void pipeline_monitor_add_queue(PipelineMonitor *monitor,
                                 const gchar     *name,
                                 GstElement      *element);
+
+/**
+ * Register an rtspsrc element for a given source so its transport statistics
+ * are polled on every report interval.  The monitor holds a ref to @element.
+ *
+ * Call this after the element has been added to the pipeline but before
+ * pipeline_monitor_print_report() / pipeline_monitor_snapshot() is invoked.
+ *
+ * @param monitor    The monitor instance.
+ * @param source_id  Source stream index (0-based).
+ * @param name       Short human-readable label (e.g. "rtspsrc-0").
+ * @param element    The rtspsrc GstElement*.
+ */
+void pipeline_monitor_add_rtspsrc(PipelineMonitor *monitor,
+                                  guint            source_id,
+                                  const gchar     *name,
+                                  GstElement      *element);
 
 /**
  * Record a decoded frame arriving directly from the source (raw tee appsink,
