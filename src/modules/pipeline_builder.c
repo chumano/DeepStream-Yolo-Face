@@ -289,12 +289,13 @@ create_app_pipeline(GMainLoop *loop, GCallback appsink_callback,
   // ---------------------------------------------------------------------------
   // Source bins (one per URI) + optional per-source raw capture branch
   ap->num_sources    = app_config.source.count;
-  ap->src_bins       = g_new0(GstElement *, ap->num_sources);
-  ap->src_tees       = g_new0(GstElement *, ap->num_sources);
-  ap->src_nvvidconvs = g_new0(GstElement *, ap->num_sources);
-  ap->src_capsfilters= g_new0(GstElement *, ap->num_sources);
-  ap->src_queues     = g_new0(GstElement *, ap->num_sources);
-  ap->src_appsinks   = g_new0(GstElement *, ap->num_sources);
+  ap->src_bins            = g_new0(GstElement *, ap->num_sources);
+  ap->src_tees            = g_new0(GstElement *, ap->num_sources);
+  ap->src_tee_mux_queues  = g_new0(GstElement *, ap->num_sources);
+  ap->src_tee_sink_queues  = g_new0(GstElement *, ap->num_sources);
+  ap->src_nvvidconvs      = g_new0(GstElement *, ap->num_sources);
+  ap->src_capsfilters     = g_new0(GstElement *, ap->num_sources);
+  ap->src_appsinks        = g_new0(GstElement *, ap->num_sources);
 
   for (guint i = 0; i < app_config.source.count; i++) {
     /* --- Request per-source nvstreammux sink pad --- */
@@ -322,24 +323,28 @@ create_app_pipeline(GMainLoop *loop, GCallback appsink_callback,
       }
       g_object_set(G_OBJECT(ap->src_tees[i]), "allow-not-linked", FALSE, NULL);
 
-      /* ── Raw capture chain: nvvidconv → capsfilter(RGBA) → queue → appsink ── */
+      /* ── Raw capture chain: nvvidconv → capsfilter(RGBA) → appsink ── */
       g_snprintf(elem_name, 48, "src_nvvidconv_%u", i);
       ap->src_nvvidconvs[i] = gst_element_factory_make("nvvideoconvert", elem_name);
       g_snprintf(elem_name, 48, "src_capsfilter_%u", i);
       ap->src_capsfilters[i] = gst_element_factory_make("capsfilter", elem_name);
-      g_snprintf(elem_name, 48, "src_queue_%u", i);
-      ap->src_queues[i] = gst_element_factory_make("queue", elem_name);
       g_snprintf(elem_name, 48, "src_appsink_%u", i);
       ap->src_appsinks[i] = gst_element_factory_make("appsink", elem_name);
+      g_snprintf(elem_name, 48, "src_tee_mux_queue_%u", i);
+      ap->src_tee_mux_queues[i] = gst_element_factory_make("queue", elem_name);
+      g_snprintf(elem_name, 48, "src_tee_sink_queue_%u", i);
+      ap->src_tee_sink_queues[i] = gst_element_factory_make("queue", elem_name);
 
-      if (!ap->src_nvvidconvs[i] || !ap->src_capsfilters[i] ||
-          !ap->src_queues[i]     || !ap->src_appsinks[i]) {
+      if (!ap->src_nvvidconvs[i]     || !ap->src_capsfilters[i] ||
+          !ap->src_appsinks[i]       ||
+          !ap->src_tee_mux_queues[i] || !ap->src_tee_sink_queues[i]) {
         g_printerr("ERROR - Failed to create raw capture elements for source %u\n", i);
         goto fail;
       }
       gst_bin_add_many(GST_BIN(ap->pipeline),
-                       ap->src_nvvidconvs[i], ap->src_capsfilters[i],
-                       ap->src_queues[i],     ap->src_appsinks[i], NULL);
+                       ap->src_tee_mux_queues[i], ap->src_tee_sink_queues[i],
+                       ap->src_nvvidconvs[i],      ap->src_capsfilters[i],
+                       ap->src_appsinks[i], NULL);
 
       /* Configure raw capture chain */
       GstCaps *rgba_caps = gst_caps_from_string(
@@ -347,15 +352,20 @@ create_app_pipeline(GMainLoop *loop, GCallback appsink_callback,
       g_object_set(G_OBJECT(ap->src_capsfilters[i]), "caps", rgba_caps, NULL);
       gst_caps_unref(rgba_caps);
 
-      /* Leaky downstream queue — drop oldest when full */
-      g_object_set(G_OBJECT(ap->src_queues[i]),
+      /* Tee → mux queue: small leaky queue to absorb tee scheduling jitter */
+      g_object_set(G_OBJECT(ap->src_tee_mux_queues[i]),
                    "max-size-buffers", 5, "leaky", 2, NULL);
+      /* Tee → cap queue: same */
+      g_object_set(G_OBJECT(ap->src_tee_sink_queues[i]),
+                   "max-size-buffers", 10, "leaky", 2, NULL);
 
-      /* Track this queue's drops in the pipeline monitor */
+      /* Track both tee queues in the pipeline monitor */
       if (monitor) {
-        gchar mon_name[32];
-        g_snprintf(mon_name, sizeof(mon_name), "src_queue_%u", i);
-        pipeline_monitor_add_queue(monitor, mon_name, ap->src_queues[i]);
+        gchar mon_name[40];
+        g_snprintf(mon_name, sizeof(mon_name), "tee_mux_q_%u", i);
+        pipeline_monitor_add_queue(monitor, mon_name, ap->src_tee_mux_queues[i]);
+        g_snprintf(mon_name, sizeof(mon_name), "tee_cap_q_%u", i);
+        pipeline_monitor_add_queue(monitor, mon_name, ap->src_tee_sink_queues[i]);
       }
 
       /* Non-synced appsink, drop when full */
@@ -371,39 +381,58 @@ create_app_pipeline(GMainLoop *loop, GCallback appsink_callback,
                      "gpu_id",           app_config.gpu_id, NULL);
       }
 
-      /* Link: tee src_0 → nvstreammux sink */
+      /* Link: tee src_0 → src_tee_mux_queue → nvstreammux sink */
       {
         GstPad *tee_mux_src = gst_element_get_request_pad(
             ap->src_tees[i], "src_%u");
-        if (gst_pad_link(tee_mux_src, mux_sink_pad) != GST_PAD_LINK_OK) {
-          g_printerr("ERROR - Failed to link tee to nvstreammux for source %u\n", i);
+        GstPad *q_sink = gst_element_get_static_pad(
+            ap->src_tee_mux_queues[i], "sink");
+        if (gst_pad_link(tee_mux_src, q_sink) != GST_PAD_LINK_OK) {
+          g_printerr("ERROR - Failed to link tee to src_tee_mux_queue for source %u\n", i);
           gst_object_unref(tee_mux_src);
+          gst_object_unref(q_sink);
           gst_object_unref(mux_sink_pad);
           goto fail;
         }
         gst_object_unref(tee_mux_src);
+        gst_object_unref(q_sink);
+
+        GstPad *q_src = gst_element_get_static_pad(
+            ap->src_tee_mux_queues[i], "src");
+        if (gst_pad_link(q_src, mux_sink_pad) != GST_PAD_LINK_OK) {
+          g_printerr("ERROR - Failed to link src_tee_mux_queue to nvstreammux for source %u\n", i);
+          gst_object_unref(q_src);
+          gst_object_unref(mux_sink_pad);
+          goto fail;
+        }
+        gst_object_unref(q_src);
         gst_object_unref(mux_sink_pad);  /* owned by mux; drop our ref */
         ctx->mux_sink_pad = NULL;         /* consumed — don't double-unref in cleanup */
       }
 
-      /* Link: tee src_1 → nvvidconv */
+      /* Link: tee src_1 → src_tee_cap_queue → nvvidconv */
       {
         GstPad *tee_cap_src = gst_element_get_request_pad(
             ap->src_tees[i], "src_%u");
-        GstPad *nvvc_sink = gst_element_get_static_pad(
-            ap->src_nvvidconvs[i], "sink");
-        if (gst_pad_link(tee_cap_src, nvvc_sink) != GST_PAD_LINK_OK) {
-          g_printerr("ERROR - Failed to link tee to nvvidconv for source %u\n", i);
+        GstPad *q_sink = gst_element_get_static_pad(
+            ap->src_tee_sink_queues[i], "sink");
+        if (gst_pad_link(tee_cap_src, q_sink) != GST_PAD_LINK_OK) {
+          g_printerr("ERROR - Failed to link tee to src_tee_cap_queue for source %u\n", i);
           gst_object_unref(tee_cap_src);
-          gst_object_unref(nvvc_sink);
+          gst_object_unref(q_sink);
           goto fail;
         }
         gst_object_unref(tee_cap_src);
-        gst_object_unref(nvvc_sink);
+        gst_object_unref(q_sink);
+
+        if (!gst_element_link(ap->src_tee_sink_queues[i], ap->src_nvvidconvs[i])) {
+          g_printerr("ERROR - Failed to link src_tee_cap_queue to nvvidconv for source %u\n", i);
+          goto fail;
+        }
       }
 
       if (!gst_element_link_many(ap->src_nvvidconvs[i], ap->src_capsfilters[i],
-                                 ap->src_queues[i], ap->src_appsinks[i], NULL)) {
+                                  ap->src_appsinks[i], NULL)) {
         g_printerr("ERROR - Failed to link raw capture chain for source %u\n", i);
         goto fail;
       }
@@ -715,9 +744,10 @@ fail:
 
   g_free(ap->src_bins);
   g_free(ap->src_tees);
+  g_free(ap->src_tee_mux_queues);
+  g_free(ap->src_tee_sink_queues);
   g_free(ap->src_nvvidconvs);
   g_free(ap->src_capsfilters);
-  g_free(ap->src_queues);
   g_free(ap->src_appsinks);
   g_free(ap->perf_struct);
   g_free(ap);
@@ -748,9 +778,10 @@ destroy_app_pipeline(AppPipeline *p)
   /* Free per-source element pointer arrays (elements are owned by pipeline) */
   g_free(p->src_bins);
   g_free(p->src_tees);
+  g_free(p->src_tee_mux_queues);
+  g_free(p->src_tee_sink_queues);
   g_free(p->src_nvvidconvs);
   g_free(p->src_capsfilters);
-  g_free(p->src_queues);
   g_free(p->src_appsinks);
 
   g_free(p->perf_struct);

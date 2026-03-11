@@ -46,7 +46,8 @@ LIBS+= -L$(LIB_INSTALL_DIR) -lnvdsgst_meta -lnvds_meta -lnvdsgst_helper -lnvbufs
        -lcuda -Wl,-rpath,$(LIB_INSTALL_DIR) $(KAFKA_LIBS) -lm -ljpeg
 
 ifeq ($(DEBUG), 1)
-	CFLAGS += -g -DDEBUG
+# Build with debug symbols and no optimization for easier debugging
+	CFLAGS += -g -DDEBUG -O0
 endif
 
 LOG_APP?=
@@ -90,6 +91,9 @@ run_rtsp: clean_images $(APP)
 
 run_rtsp_debug: clean_images $(APP)
 	GST_DEBUG=$(LOG_APP):$(LOG) gdb --args ./$(APP) --config /app/configs/app.ini \
+
+run_rtsp_valgrind: clean_images $(APP)
+	GST_DEBUG=$(LOG_APP):$(LOG) valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --log-file=valgrind.log ./$(APP) --config /app/configs/app.ini \
 	-s rtsp://100.64.0.153:8554/test
 
 run_2infer: clean_images $(APP)

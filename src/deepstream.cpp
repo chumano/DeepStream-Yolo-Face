@@ -11,6 +11,7 @@
 #include "modules/json_builder.h"
 #include "modules/osd_probe.h"
 #include "modules/pipeline_builder.h"
+#include "modules/pipeline_dump.h"
 #include "modules/utils.h"
 
 // GST_DEBUG_CATEGORY_STATIC to GST_DEBUG_CATEGORY  
@@ -824,6 +825,12 @@ main(gint argc, char *argv[])
   if (gst_element_set_state(ap->pipeline, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
     g_printerr("ERROR - Failed to set pipeline to playing\n");
     return -1;
+  }
+
+  /* Dump all pipeline elements + properties to a JSON file for inspection */
+  {
+    const gchar *dump_dir = "/app/outputs";
+    dump_pipeline_elements_to_json(ap->pipeline, dump_dir);
   }
 
   GST_DEBUG("\n");
