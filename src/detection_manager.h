@@ -26,7 +26,8 @@ typedef struct _DetectionManager DetectionManager;
  * Create a new detection manager instance
  * @param enabled Whether the manager is enabled
  * @param broker Kafka broker address (can be NULL if not using Kafka)
- * @param topic Kafka topic name (can be NULL if not using Kafka)
+ * @param topic Kafka topic for face-detection messages (can be NULL)
+ * @param event_topic Kafka topic for one-shot events; if NULL, falls back to topic
  * @param delay_sec Delay before sending detection in seconds
  * @param quality_threshold Quality improvement threshold for resending
  * @param cleanup_interval_sec Interval for cleanup in seconds
@@ -37,6 +38,7 @@ typedef struct _DetectionManager DetectionManager;
 DetectionManager* detection_manager_new(gboolean enabled,
                                         const gchar *broker,
                                         const gchar *topic,
+                                        const gchar *event_topic,
                                         gdouble delay_sec,
                                         gdouble quality_threshold,
                                         gdouble cleanup_interval_sec,
@@ -95,6 +97,24 @@ void detection_manager_cleanup_kafka(DetectionManager *manager);
  * @return TRUE if enabled, FALSE otherwise
  */
 gboolean detection_manager_is_enabled(DetectionManager *manager);
+
+/**
+ * Send a raw JSON event to Kafka immediately, bypassing the pending queue.
+ * Intended for one-shot events (e.g. smart-record done) that do not require
+ * the delay / deduplication logic.
+ *
+ * The event_type string is attached to the Kafka message as the value of
+ * the "event_type" message header so consumers can route without parsing
+ * the payload.
+ *
+ * @param manager    Detection manager instance
+ * @param event_type Human-readable event type string (e.g. "smart_record_done")
+ * @param json_data  Null-terminated JSON payload to send
+ * @return TRUE on success, FALSE on error or when Kafka is not available
+ */
+gboolean detection_manager_send_event(DetectionManager *manager,
+                                      const gchar *event_type,
+                                      const gchar *json_data);
 
 #ifdef __cplusplus
 }

@@ -43,12 +43,12 @@ m.sink_0 nvstreammux name=m width=1280 height=720 batch-size=1 ! nvmultistreamti
   - https://docs.nvidia.com/metropolis/deepstream/7.1/text/DS_Smart_video.html
 
 - [x] smart-record sr-done callback to get the recorded video file path
-   - [ ] send to Kafka
+   - [x] send to Kafka
 - [x] clear old images/videos on thread
 
-- [ ] monitor drop frame in nvurisrcbin/rtspsrc
+- [ ] frame_buffer push raw frame data, then encode jpeg in buffer worker thread when need to save (currently push encoded jpeg data to frame_buffer)
 
-- [ ] frame_buffer push raw frame data, then encode jpeg in buffer worker thread (currently push encoded jpeg data to frame_buffer)
+- [ ] monitor drop frame in nvurisrcbin/rtspsrc
 
 ### Advanced features
 - [ ] handle dynamic input sources (add/remove camera at runtime) through rest server

@@ -132,3 +132,32 @@ build_frame_json(guint        source_id,
 
   return g_string_free(json, FALSE);
 }
+
+gchar *
+build_smart_record_event_json(guint        source_id,
+                              guint        session_id,
+                              const gchar *file_path,
+                              gdouble      duration_sec,
+                              guint        container,
+                              guint        width,
+                              guint        height,
+                              gdouble      timestamp)
+{
+  GString *json = g_string_new("{");
+
+  g_string_append_printf(json, "\"event\":\"smart_record_done\",");
+  g_string_append_printf(json, "\"timestamp\":%.3f,", timestamp);
+  g_string_append_printf(json, "\"source_id\":%u,", source_id);
+  g_string_append_printf(json, "\"session_id\":%u,", session_id);
+  if (file_path)
+    g_string_append_printf(json, "\"file\":\"%s\",", file_path);
+  else
+    g_string_append(json, "\"file\":null,");
+  g_string_append_printf(json, "\"duration_sec\":%.3f,", duration_sec);
+  g_string_append_printf(json, "\"container\":%u,", container);
+  g_string_append_printf(json, "\"width\":%u,", width);
+  g_string_append_printf(json, "\"height\":%u", height);
+
+  g_string_append_c(json, '}');
+  return g_string_free(json, FALSE);
+}

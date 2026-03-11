@@ -39,7 +39,7 @@ typedef struct {
 /** Max number of retries when the target frame hasn't arrived yet. */
 #define MAX_SAVE_RETRIES 10
 /** Sleep between retries (microseconds). */
-#define RETRY_SLEEP_US   100000   /* 100 ms */
+#define RETRY_SLEEP_US   50000   /* 50 ms */
 
 /** Sentinel value placed on the queue to stop the worker thread cleanly. */
 static SaveTask _save_task_sentinel;

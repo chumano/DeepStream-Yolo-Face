@@ -64,6 +64,28 @@ gchar *build_frame_json(guint        source_id,
                         gchar      **object_jsons,
                         guint        num_objects);
 
+/**
+ * Build a JSON event string for a completed smart-record session.
+ *
+ * @param source_id    source stream index
+ * @param session_id   NvDsSR session identifier
+ * @param file_path    full path of the saved recording file
+ * @param duration_sec recording duration in seconds
+ * @param container    container format (0 = MP4, 1 = MKV)
+ * @param width        frame width of the recording
+ * @param height       frame height of the recording
+ * @param timestamp    wall-clock time when the event fired (seconds)
+ * @return newly-allocated JSON string; caller must g_free()
+ */
+gchar *build_smart_record_event_json(guint        source_id,
+                                     guint        session_id,
+                                     const gchar *file_path,
+                                     gdouble      duration_sec,
+                                     guint        container,
+                                     guint        width,
+                                     guint        height,
+                                     gdouble      timestamp);
+
 #ifdef __cplusplus
 }
 #endif

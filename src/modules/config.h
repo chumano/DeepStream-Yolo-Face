@@ -76,7 +76,8 @@ typedef struct {
 typedef struct {
   gboolean enabled;
   gchar   *broker;
-  gchar   *topic;
+  gchar   *topic;        /**< topic for face-detection messages */
+  gchar   *event_topic;  /**< topic for one-shot events (NULL → falls back to topic) */
   gdouble  send_delay_sec;
   gdouble  quality_improvement_threshold;
   gdouble  sent_record_ttl_sec;

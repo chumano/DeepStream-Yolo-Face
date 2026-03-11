@@ -52,10 +52,17 @@ typedef struct _DetectionStats {
   pthread_mutex_t lock;
 } DetectionStats;
 
+/** Lightweight wrapper for a one-shot Kafka event (not tied to a tracked object). */
+typedef struct {
+  const gchar *event_type;  /**< placed in the "event_type" Kafka message header */
+  const gchar *json_data;   /**< message payload (borrowed, not freed here) */
+} KafkaEvent;
+
 struct _DetectionManager {
   gboolean enabled;
   gchar *broker;
-  gchar *topic;
+  gchar *topic;        /**< Kafka topic for face-detection messages */
+  gchar *event_topic;  /**< Kafka topic for one-shot events (NULL → falls back to topic) */
   gdouble delay_sec;
   gdouble quality_improvement_threshold;
   gdouble cleanup_interval_sec;
@@ -351,6 +358,48 @@ static void kafka_producer_destroy(rd_kafka_t *producer, rd_kafka_topic_t *topic
     g_print("INFO - Kafka producer destroyed\n");
   }
 }
+
+/**
+ * Send a one-shot KafkaEvent, attaching its event_type as a message header.
+ * rd_kafka_produceva takes ownership of the headers on success; the caller
+ * must destroy them only on failure.
+ */
+static gboolean kafka_send_event(DetectionManager *manager, const KafkaEvent *event)
+{
+  if (manager->kafka_producer == NULL) {
+    GST_DEBUG("[send-event] Kafka not connected, dropping event type=%s", event->event_type);
+    return TRUE;
+  }
+
+  const gchar *topic = manager->event_topic ? manager->event_topic : manager->topic;
+  if (!topic) {
+    GST_DEBUG("[send-event] No event topic configured, dropping event type=%s", event->event_type);
+    return TRUE;
+  }
+
+  rd_kafka_headers_t *hdrs = rd_kafka_headers_new(1);
+  rd_kafka_header_add(hdrs, "event_type", -1, event->event_type, -1);
+
+  rd_kafka_resp_err_t err = rd_kafka_producev(
+      manager->kafka_producer,
+      RD_KAFKA_V_TOPIC(topic),
+      RD_KAFKA_V_PARTITION(RD_KAFKA_PARTITION_UA),
+      RD_KAFKA_V_MSGFLAGS(RD_KAFKA_MSG_F_COPY),
+      RD_KAFKA_V_VALUE((void *)event->json_data, strlen(event->json_data)),
+      RD_KAFKA_V_HEADERS(hdrs),
+      RD_KAFKA_V_END
+  );
+
+  if (err != RD_KAFKA_RESP_ERR_NO_ERROR) {
+    GST_ERROR("[send-event] rd_kafka_produceva failed (event_type=%s): %s",
+              event->event_type, rd_kafka_err2str(err));
+    rd_kafka_headers_destroy(hdrs);  /* librdkafka only takes ownership on success */
+    return FALSE;
+  }
+
+  rd_kafka_poll(manager->kafka_producer, 0);
+  return TRUE;
+}
 #endif
 
 static gboolean detection_manager_send_kafka(DetectionManager *manager, Detection *detection)
@@ -443,6 +492,7 @@ static gboolean debug_initialized = FALSE;
 DetectionManager* detection_manager_new(gboolean enabled,
                                         const gchar *broker,
                                         const gchar *topic,
+                                        const gchar *event_topic,
                                         gdouble delay_sec,
                                         gdouble quality_threshold,
                                         gdouble cleanup_interval_sec,
@@ -458,6 +508,7 @@ DetectionManager* detection_manager_new(gboolean enabled,
   manager->enabled = enabled;
   manager->broker = broker ? g_strdup(broker) : NULL;
   manager->topic = topic ? g_strdup(topic) : NULL;
+  manager->event_topic = event_topic ? g_strdup(event_topic) : NULL;
   manager->delay_sec = delay_sec;
   manager->quality_improvement_threshold = quality_threshold;
   manager->cleanup_interval_sec = cleanup_interval_sec;
@@ -477,6 +528,9 @@ void detection_manager_free(DetectionManager *manager)
     }
     if (manager->topic) {
       g_free(manager->topic);
+    }
+    if (manager->event_topic) {
+      g_free(manager->event_topic);
     }
     if (manager->store) {
       detection_store_free(manager->store);
@@ -648,4 +702,31 @@ void detection_manager_cleanup_kafka(DetectionManager *manager)
 gboolean detection_manager_is_enabled(DetectionManager *manager)
 {
   return manager ? manager->enabled : FALSE;
+}
+
+gboolean detection_manager_send_event(DetectionManager *manager,
+                                      const gchar *event_type,
+                                      const gchar *json_data)
+{
+  if (!manager || !event_type || !json_data)
+    return FALSE;
+
+  if (!manager->enabled) {
+    GST_DEBUG("[send-event] manager disabled, skipping event_type=%s", event_type);
+    return FALSE;
+  }
+
+#ifdef KAFKA_ENABLED_BUILD
+  KafkaEvent event = {
+    .event_type = event_type,
+    .json_data  = json_data,
+  };
+
+  gboolean ok = kafka_send_event(manager, &event);
+  detection_manager_increment_stat(manager, ok ? "sent" : "failed");
+  return ok;
+#else
+  g_print("INFO - [send-event] Kafka not compiled in, dropping event_type=%s\n", event_type);
+  return FALSE;
+#endif
 }

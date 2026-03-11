@@ -88,6 +88,7 @@ AppConfig app_config = {
     .enabled                      = FALSE,
     .broker                       = NULL,
     .topic                        = NULL,
+    .event_topic                  = NULL,
     .send_delay_sec               = 2.0,
     .quality_improvement_threshold = 0.005,
     .sent_record_ttl_sec          = 60.0,
@@ -253,7 +254,8 @@ parse_config_file(const gchar *config_file, GError **error)
 
   /* ── [kafka] ─────────────────────────────────────────────── */
   GET_STR ("kafka", "broker",             app_config.kafka.broker);
-  GET_STR ("kafka", "topic",              app_config.kafka.topic);
+  GET_STR ("kafka", "topic",              app_config.kafka.topic);  
+  GET_STR ("kafka", "event-topic",        app_config.kafka.event_topic);  
   GET_DBL ("kafka", "delay",              app_config.kafka.send_delay_sec);
   GET_DBL ("kafka", "quality-threshold",  app_config.kafka.quality_improvement_threshold);
   GET_DBL ("kafka", "sent-record-ttl",    app_config.kafka.sent_record_ttl_sec);
@@ -571,10 +573,11 @@ static void print_app_config(void) {
     app_config.appsink.max_buffers,
     app_config.appsink.drop ? "TRUE" : "FALSE",
     app_config.appsink.sync ? "TRUE" : "FALSE");
-  g_print("\n  kafka: enabled=%s broker=%s topic=%s send_delay_sec=%.3f quality_improvement_threshold=%.3f sent_record_ttl_sec=%.3f pending_ttl_sec=%.3f cleanup_interval_sec=%.3f",
+  g_print("\n  kafka: enabled=%s broker=%s topic=%s event_topic=%s send_delay_sec=%.3f quality_improvement_threshold=%.3f sent_record_ttl_sec=%.3f pending_ttl_sec=%.3f cleanup_interval_sec=%.3f",
     app_config.kafka.enabled ? "TRUE" : "FALSE",
     app_config.kafka.broker ? app_config.kafka.broker : "(none)",
     app_config.kafka.topic ? app_config.kafka.topic : "(none)",
+    app_config.kafka.event_topic ? app_config.kafka.event_topic : "(same as topic)",
     app_config.kafka.send_delay_sec,
     app_config.kafka.quality_improvement_threshold,
     app_config.kafka.sent_record_ttl_sec,
@@ -641,6 +644,9 @@ config_free(void)
 
   g_free(app_config.kafka.topic);
   app_config.kafka.topic = NULL;
+
+  g_free(app_config.kafka.event_topic);
+  app_config.kafka.event_topic = NULL;
 
   g_free(app_config.frame_save.dir);
   app_config.frame_save.dir = NULL;

@@ -25,7 +25,10 @@ GST_DEBUG_CATEGORY(deepstream_debug_category);
 // from the source tee appsink.  Access is single-threaded per source (each
 // GStreamer pad-probe / appsink callback fires on one thread per source).
 #define MAX_RAW_SOURCES 64
-static guint raw_src_frame_counters[MAX_RAW_SOURCES] = {0};
+static guint   raw_src_frame_counters[MAX_RAW_SOURCES] = {0};
+// Per-source smart-record session IDs — updated after each start-sr call so
+// the assigned session ID is available for stop-sr or logging.
+static guint32 sr_session_ids[MAX_RAW_SOURCES] = {0};
 
 // =============================================================================
 // Utility Functions
@@ -196,17 +199,42 @@ sr_done_callback(GstElement *src, NvDsSRRecordingInfo *info, gpointer user_data)
                      ? g_strdup_printf("%s/%s", info->dirpath, info->filename)
                      : g_strdup(info->filename ? info->filename : "(unknown)");
 
+  gdouble duration_sec = (gdouble)info->duration / 1000.0;
+
   GST_INFO("[smart-record] Recording done: src=%u sessionId=%u file=%s "
            "duration=%.2fs container=%u %ux%u",
            stream_id,
            info->sessionId,
            full_path,
-           (gdouble)info->duration / 1000.0,
+           duration_sec,
            info->containerType,
            info->width, info->height);
 
-  g_print("[smart-record] Saved: %s (%.2f s)\n",
-          full_path, (gdouble)info->duration / 1000.0);
+  g_print("[smart-record] Saved: %s (%.2f s)\n", full_path, duration_sec);
+
+  /* Send smart-record completion event to Kafka if enabled */
+  if (app_config.kafka.enabled && detection_manager &&
+      detection_manager_is_enabled(detection_manager)) {
+
+    gchar *json = build_smart_record_event_json(
+        stream_id,
+        info->sessionId,
+        full_path,
+        duration_sec,
+        info->containerType,
+        info->width,
+        info->height,
+        get_current_time());
+
+    GST_INFO("[smart-record] Sending Kafka event: %s", json);
+
+    if (!detection_manager_send_event(detection_manager, "smart_record_done", json)) {
+      GST_WARNING("[smart-record] Failed to send Kafka event "
+                  "for src=%u sessionId=%u", stream_id, info->sessionId);
+    }
+
+    g_free(json);
+  }
 
   g_free(full_path);
 }
@@ -604,11 +632,15 @@ appsink_new_sample_callback(GstElement *appsink, gpointer user_data)
           /* start-sr(sessionId, start_time=cache_size, duration=0, file_path=NULL)
           * start_time: how many seconds of cache to include before the trigger.
           * duration=0: record until stop-sr is sent (auto-stop by default-duration). */
-          guint32 sessId = 0;
           guint start_time = app_config.smart_record.cache_size_sec;
           guint duration   = 0;   /* 0 → auto-stop after default-duration */
+          guint32 sessId   = 0;   /* output: filled by nvurisrcbin start-sr */
           g_signal_emit_by_name(ap->src_bins[src_id], "start-sr",
                                 &sessId, start_time, duration, NULL);
+          /* Store the assigned session ID so it can be referenced later
+           * (e.g. for stop-sr, deduplication, or Kafka events). */
+          if (src_id < MAX_RAW_SOURCES)
+            sr_session_ids[src_id] = sessId;
           GST_DEBUG("[smart-record] start-sr triggered for src=%u frame=%u, sessionId=%u",
                   src_id, frame_meta->frame_num, sessId);
         }else {
@@ -684,7 +716,7 @@ static void
 init_detection_manager(void)
 {
   if (!app_config.kafka.enabled) {
-    detection_manager = detection_manager_new(FALSE, NULL, NULL,
+    detection_manager = detection_manager_new(FALSE, NULL, NULL, NULL,
                                              app_config.kafka.send_delay_sec,
                                              app_config.kafka.quality_improvement_threshold,
                                              app_config.kafka.cleanup_interval_sec,
@@ -694,6 +726,7 @@ init_detection_manager(void)
   }
   
   detection_manager = detection_manager_new(TRUE, app_config.kafka.broker, app_config.kafka.topic,
+                                           app_config.kafka.event_topic,
                                            app_config.kafka.send_delay_sec,
                                            app_config.kafka.quality_improvement_threshold,
                                            app_config.kafka.cleanup_interval_sec,
