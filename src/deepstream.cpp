@@ -549,16 +549,27 @@ appsink_new_sample_callback(GstElement *appsink, gpointer user_data)
         && frame_meta->num_obj_meta > 0) {
       guint src_id = frame_meta->source_id;
       if (src_id < ap->num_sources && ap->src_bins[src_id]) {
-        /* start-sr(sessionId, start_time=cache_size, duration=0, file_path=NULL)
-         * start_time: how many seconds of cache to include before the trigger.
-         * duration=0: record until stop-sr is sent (auto-stop by default-duration). */
-        guint32 sessId = 0;
-        guint start_time = app_config.smart_record.cache_size_sec;
-        guint duration   = 0;   /* 0 → auto-stop after default-duration */
-        g_signal_emit_by_name(ap->src_bins[src_id], "start-sr",
-                              &sessId, start_time, duration, NULL);
-        GST_DEBUG("[smart-record] start-sr triggered for src=%u frame=%u, sessionId=%u",
-                 src_id, frame_meta->frame_num, sessId);
+        GstState cur_state = GST_STATE_NULL;
+        gst_element_get_state(ap->src_bins[src_id], &cur_state, NULL, 0);
+        // Only trigger smart record when the source bin is actually playing.
+        // During RTSP reconnect the bin is in READY/PAUSED and emitting
+        // start-sr on it can corrupt internal state or crash.
+
+         if (cur_state == GST_STATE_PLAYING) {
+          /* start-sr(sessionId, start_time=cache_size, duration=0, file_path=NULL)
+          * start_time: how many seconds of cache to include before the trigger.
+          * duration=0: record until stop-sr is sent (auto-stop by default-duration). */
+          guint32 sessId = 0;
+          guint start_time = app_config.smart_record.cache_size_sec;
+          guint duration   = 0;   /* 0 → auto-stop after default-duration */
+          g_signal_emit_by_name(ap->src_bins[src_id], "start-sr",
+                                &sessId, start_time, duration, NULL);
+          GST_DEBUG("[smart-record] start-sr triggered for src=%u frame=%u, sessionId=%u",
+                  src_id, frame_meta->frame_num, sessId);
+        }else {
+          GST_WARNING("[smart-record] skip start-sr for src=%u: state=%s (reconnecting?)",
+                   src_id, gst_element_state_get_name(cur_state));
+        }
       }
     }
 

@@ -43,14 +43,14 @@ frame_filename_new_infer(guint source_id, guint frame_num,
 {
   guint64 ts_us = (guint64)(timestamp_sec * 1e6);
 
-  return g_strdup_printf("frame_src%02u_num%06u_infer%d_%012" G_GINT64_FORMAT "us.jpg",
-                         source_id, frame_num, infer_done ? 1 : 0, ts_us);
+  return g_strdup_printf("frame_src%02u_%012" G_GINT64_FORMAT "us_num%06u_infer%d.jpg",
+                         source_id, ts_us, frame_num, infer_done ? 1 : 0);
 }
 
 gchar *
 frame_filename_new_prebuf(guint source_id, guint frame_num, gdouble timestamp_sec)
 {
   guint64 ts_us = (guint64)(timestamp_sec * 1e6);
-  return g_strdup_printf("frame_src%02u_num%06u_%012" G_GUINT64_FORMAT "us.jpg",
-                         source_id, frame_num, ts_us);
+  return g_strdup_printf("frame_src%02u_%012" G_GUINT64_FORMAT "us_num%06u.jpg",
+                         source_id, ts_us, frame_num);
 }

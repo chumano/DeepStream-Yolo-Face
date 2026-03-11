@@ -362,9 +362,9 @@ create_app_pipeline(GMainLoop *loop, GCallback appsink_callback,
       /* Track both tee queues in the pipeline monitor */
       if (monitor) {
         gchar mon_name[40];
-        g_snprintf(mon_name, sizeof(mon_name), "tee_mux_q_%u", i);
+        g_snprintf(mon_name, sizeof(mon_name), "src_tee_mux_q_%u", i);
         pipeline_monitor_add_queue(monitor, mon_name, ap->src_tee_mux_queues[i]);
-        g_snprintf(mon_name, sizeof(mon_name), "tee_cap_q_%u", i);
+        g_snprintf(mon_name, sizeof(mon_name), "src_tee_sink_q_%u", i);
         pipeline_monitor_add_queue(monitor, mon_name, ap->src_tee_sink_queues[i]);
       }
 
