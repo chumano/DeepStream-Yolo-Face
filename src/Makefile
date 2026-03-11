@@ -91,10 +91,13 @@ run_rtsp: clean_images $(APP)
 
 run_rtsp_debug: clean_images $(APP)
 	GST_DEBUG=$(LOG_APP):$(LOG) gdb --args ./$(APP) --config /app/configs/app.ini \
+		-s rtsp://100.64.0.153:8554/test
 
 run_rtsp_valgrind: clean_images $(APP)
-	GST_DEBUG=$(LOG_APP):$(LOG) valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --log-file=valgrind.log ./$(APP) --config /app/configs/app.ini \
-	-s rtsp://100.64.0.153:8554/test
+	GST_DEBUG=$(LOG_APP):$(LOG) valgrind \
+		--leak-check=full --show-leak-kinds=all --track-origins=yes --suppressions=valgrind.supp --log-file=valgrind.log \
+		./$(APP) --config /app/configs/app.ini \
+		-s rtsp://100.64.0.153:8554/test
 
 run_2infer: clean_images $(APP)
 	GST_DEBUG=$(LOG_APP):$(LOG) ./$(APP) --config /app/configs/app2.ini \

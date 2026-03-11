@@ -1,0 +1,75 @@
+{
+ignore-cuda-cond
+   Memcheck:Cond
+   obj:/usr/lib/wsl/drivers/*/libcuda.so.1.1
+}
+
+# Suppress all memory errors in libcuda.so.1.1
+{
+ignore-cuda-all
+   Memcheck:Addr8
+   obj:/usr/lib/wsl/drivers/*/libcuda.so.1.1
+}
+
+# Suppress conditional jump/move on uninitialized value(s) in libnvinfer.so
+{
+ignore-nvinfer-cond
+   Memcheck:Cond
+   obj:/usr/lib/x86_64-linux-gnu/libnvinfer.so*
+}
+
+{
+   ignore-cond-wsl-drivers
+   Memcheck:Cond
+   obj:/usr/lib/wsl/drivers/*
+}
+
+{
+   ignore-cond-wsl-lib
+   Memcheck:Cond
+   obj:/usr/lib/wsl/lib/*
+}
+
+# Suppress all memory errors in libnvinfer.so
+{
+ignore-nvinfer-all
+   Memcheck:Addr8
+   obj:/usr/lib/x86_64-linux-gnu/libnvinfer.so*
+}
+
+# Suppress errors in libcudart.so (CUDA runtime)
+{
+ignore-cudart-all
+   Memcheck:Addr8
+   obj:/usr/local/cuda-*/targets/x86_64-linux/lib/libcudart.so*
+}
+
+# Suppress errors in pthread (common with multi-threaded apps)
+{
+ignore-pthread-all
+   Memcheck:Addr8
+   obj:/usr/lib/x86_64-linux-gnu/libpthread-*
+}
+
+# Suppress all memory errors in all libraries under /usr/lib/x86_64-linux-gnu
+{
+   ignore-all-x86_64-linux-gnu
+   Memcheck:Addr8
+   obj:/usr/lib/x86_64-linux-gnu/*
+}
+
+# Suppress all memory errors in all libraries under /opt/nvidia/deepstream/deepstream-7.1/lib/
+{
+   ignore-all-deepstream-lib
+   Memcheck:Addr8
+   obj:/opt/nvidia/deepstream/deepstream-7.1/lib/*
+}
+
+# Suppress all memory errors in all libraries under /usr/lib/wsl/drivers/
+{
+   ignore-all-wsl-drivers
+   Memcheck:Addr8
+   obj:/usr/lib/wsl/drivers/*
+}
+
+# Add more suppressions as needed for other system/third-party libraries
