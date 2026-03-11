@@ -84,7 +84,9 @@ gchar *build_smart_record_event_json(guint        source_id,
                                      guint        container,
                                      guint        width,
                                      guint        height,
-                                     gdouble      timestamp);
+                                     gdouble      timestamp,
+                                     guint        frame_num,
+                                     guint        num_obj);
 
 #ifdef __cplusplus
 }

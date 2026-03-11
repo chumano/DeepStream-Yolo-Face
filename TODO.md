@@ -45,10 +45,10 @@ m.sink_0 nvstreammux name=m width=1280 height=720 batch-size=1 ! nvmultistreamti
 - [x] smart-record sr-done callback to get the recorded video file path
    - [x] send to Kafka
 - [x] clear old images/videos on thread
+- [x] monitor drop frame in nvurisrcbin/rtspsrc
 
 - [ ] frame_buffer push raw frame data, then encode jpeg in buffer worker thread when need to save (currently push encoded jpeg data to frame_buffer)
 
-- [ ] monitor drop frame in nvurisrcbin/rtspsrc
 
 ### Advanced features
 - [ ] handle dynamic input sources (add/remove camera at runtime) through rest server

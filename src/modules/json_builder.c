@@ -141,7 +141,9 @@ build_smart_record_event_json(guint        source_id,
                               guint        container,
                               guint        width,
                               guint        height,
-                              gdouble      timestamp)
+                              gdouble      timestamp,
+                              guint        frame_num,
+                              guint        num_obj)
 {
   GString *json = g_string_new("{");
 
@@ -156,7 +158,9 @@ build_smart_record_event_json(guint        source_id,
   g_string_append_printf(json, "\"duration_sec\":%.3f,", duration_sec);
   g_string_append_printf(json, "\"container\":%u,", container);
   g_string_append_printf(json, "\"width\":%u,", width);
-  g_string_append_printf(json, "\"height\":%u", height);
+  g_string_append_printf(json, "\"height\":%u,", height);
+  g_string_append_printf(json, "\"frame_num\":%u,", frame_num);
+  g_string_append_printf(json, "\"num_obj\":%u", num_obj);
 
   g_string_append_c(json, '}');
   return g_string_free(json, FALSE);

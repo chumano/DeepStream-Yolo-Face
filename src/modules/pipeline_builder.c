@@ -303,7 +303,7 @@ create_nvurisrcbin(guint stream_id, const gchar *uri, SourceBinCtx *ctx,
   if (app_config.smart_record.enabled && sr_done_callback) {
     g_signal_connect(G_OBJECT(nvurisrcbin), "sr-done",
                      sr_done_callback,
-                     GUINT_TO_POINTER(stream_id));
+                     NULL);
   }
 
   return nvurisrcbin;

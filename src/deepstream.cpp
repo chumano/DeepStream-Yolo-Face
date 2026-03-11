@@ -30,6 +30,16 @@ static guint   raw_src_frame_counters[MAX_RAW_SOURCES] = {0};
 // the assigned session ID is available for stop-sr or logging.
 static guint32 sr_session_ids[MAX_RAW_SOURCES] = {0};
 
+/**
+ * User-data passed to the "start-sr" signal and forwarded to the
+ * "sr-done" callback via NvDsSRRecordingInfo.
+ */
+typedef struct {
+  guint  source_id;    /* stream / source index                  */
+  guint  frame_num;    /* frame number that triggered the record  */
+  guint  num_obj_meta; /* number of detected objects in that frame */
+} SrUserData;
+
 // =============================================================================
 // Utility Functions
 // =============================================================================
@@ -179,7 +189,7 @@ raw_src_appsink_callback(GstElement *appsink, gpointer user_data)
 /**
  * Called by nvurisrcbin when a smart-recording session finishes writing.
  *
- * @user_data  source index passed as GUINT_TO_POINTER(stream_id)
+ * @user_data  data passed from "start-sr"
  *
  * Logs the completed recording and prints a visible confirmation line.
  * Extend here to trigger post-processing, move the file, or publish a
@@ -188,10 +198,14 @@ raw_src_appsink_callback(GstElement *appsink, gpointer user_data)
 static void
 sr_done_callback(GstElement *src, NvDsSRRecordingInfo *info, gpointer user_data)
 {
-  guint stream_id = GPOINTER_TO_UINT(user_data);
+  SrUserData *sr_data = (SrUserData *)user_data;
+  guint stream_id  = sr_data ? sr_data->source_id    : 0;
+  guint frame_num  = sr_data ? sr_data->frame_num     : 0;
+  guint num_obj    = sr_data ? sr_data->num_obj_meta  : 0;
 
   if (!info) {
     GST_WARNING("[smart-record] sr-done fired for src=%u but info is NULL", stream_id);
+    g_free(sr_data);
     return;
   }
 
@@ -201,16 +215,17 @@ sr_done_callback(GstElement *src, NvDsSRRecordingInfo *info, gpointer user_data)
 
   gdouble duration_sec = (gdouble)info->duration / 1000.0;
 
-  GST_INFO("[smart-record] Recording done: src=%u sessionId=%u file=%s "
+  GST_INFO("[smart-record] Recording done: src=%u frame=%u num_obj=%u sessionId=%u file=%s "
            "duration=%.2fs container=%u %ux%u",
-           stream_id,
+           stream_id, frame_num, num_obj,
            info->sessionId,
            full_path,
            duration_sec,
            info->containerType,
            info->width, info->height);
 
-  g_print("[smart-record] Saved: %s (%.2f s)\n", full_path, duration_sec);
+  g_print("[smart-record] Saved: %s (%.2f s) [src=%u frame=%u num_obj=%u]\n",
+          full_path, duration_sec, stream_id, frame_num, num_obj);
 
   /* Send smart-record completion event to Kafka if enabled */
   if (app_config.kafka.enabled && detection_manager &&
@@ -224,7 +239,9 @@ sr_done_callback(GstElement *src, NvDsSRRecordingInfo *info, gpointer user_data)
         info->containerType,
         info->width,
         info->height,
-        get_current_time());
+        get_current_time(),
+        frame_num,
+        num_obj);
 
     GST_INFO("[smart-record] Sending Kafka event: %s", json);
 
@@ -237,6 +254,64 @@ sr_done_callback(GstElement *src, NvDsSRRecordingInfo *info, gpointer user_data)
   }
 
   g_free(full_path);
+  g_free(sr_data);
+}
+
+
+/**
+ * Trigger nvurisrcbin Smart Record when a detection is present in @frame_meta.
+ * https://docs.nvidia.com/metropolis/deepstream/7.1/text/DS_Smart_video.html
+ *
+ * Does nothing if smart_record is disabled, the frame has no objects, or the
+ * source bin is not in GST_STATE_PLAYING (e.g. during an RTSP reconnect).
+ */
+static void
+trigger_smart_record(AppPipeline *ap, NvDsFrameMeta *frame_meta)
+{
+  if (!app_config.smart_record.enabled
+      || !ap
+      || frame_meta->obj_meta_list == NULL
+      || frame_meta->num_obj_meta == 0)
+    return;
+
+  guint src_id = frame_meta->source_id;
+  if (src_id >= ap->num_sources || !ap->src_bins[src_id])
+    return;
+
+  GstState cur_state = GST_STATE_NULL;
+  gst_element_get_state(ap->src_bins[src_id], &cur_state, NULL, 0);
+
+  /* Only trigger when the source bin is actually playing.
+   * During RTSP reconnect the bin is in READY/PAUSED and emitting
+   * start-sr on it can corrupt internal state or crash. */
+  if (cur_state != GST_STATE_PLAYING) {
+    GST_WARNING("[smart-record] skip start-sr for src=%u: state=%s (reconnecting?)",
+                src_id, gst_element_state_get_name(cur_state));
+    return;
+  }
+
+  /* start-sr(sessionId, start_time=cache_size, duration=0, file_path=NULL)
+   * start_time : how many seconds of cache to include before the trigger.
+   * duration=0 : record until stop-sr is sent (auto-stop by default-duration). */
+  guint    start_time  = app_config.smart_record.cache_size_sec;
+  guint    duration    = 0;  /* 0 → auto-stop after default-duration */
+  guint32  sessId      = 0;  /* output: filled by nvurisrcbin start-sr */
+
+  SrUserData *sr_user_data = g_new0(SrUserData, 1);
+  sr_user_data->source_id    = frame_meta->source_id;
+  sr_user_data->frame_num    = (guint)frame_meta->frame_num;
+  sr_user_data->num_obj_meta = (guint)frame_meta->num_obj_meta;
+
+  g_signal_emit_by_name(ap->src_bins[src_id], "start-sr",
+                        &sessId, start_time, duration, sr_user_data);
+
+  /* Store the assigned session ID so it can be referenced later
+   * (e.g. for stop-sr, deduplication, or Kafka events). */
+  if (src_id < MAX_RAW_SOURCES)
+    sr_session_ids[src_id] = sessId;
+
+  GST_DEBUG("[smart-record] start-sr triggered for src=%u frame=%u, sessionId=%u",
+            src_id, frame_meta->frame_num, sessId);
 }
 
 // =============================================================================
@@ -477,6 +552,7 @@ save_frame_to_json(guint source_id, guint frame_num, gdouble timestamp,
 }
 
 
+
 static GstFlowReturn
 appsink_new_sample_callback(GstElement *appsink, gpointer user_data)
 {
@@ -618,40 +694,7 @@ appsink_new_sample_callback(GstElement *appsink, gpointer user_data)
     }
 
     // Trigger nvurisrcbin Smart Record on detection
-    // https://docs.nvidia.com/metropolis/deepstream/7.1/text/DS_Smart_video.html
-    if (app_config.smart_record.enabled
-        && ap
-        && frame_meta->obj_meta_list != NULL
-        && frame_meta->num_obj_meta > 0) {
-      guint src_id = frame_meta->source_id;
-      if (src_id < ap->num_sources && ap->src_bins[src_id]) {
-        GstState cur_state = GST_STATE_NULL;
-        gst_element_get_state(ap->src_bins[src_id], &cur_state, NULL, 0);
-        // Only trigger smart record when the source bin is actually playing.
-        // During RTSP reconnect the bin is in READY/PAUSED and emitting
-        // start-sr on it can corrupt internal state or crash.
-
-         if (cur_state == GST_STATE_PLAYING) {
-          /* start-sr(sessionId, start_time=cache_size, duration=0, file_path=NULL)
-          * start_time: how many seconds of cache to include before the trigger.
-          * duration=0: record until stop-sr is sent (auto-stop by default-duration). */
-          guint start_time = app_config.smart_record.cache_size_sec;
-          guint duration   = 0;   /* 0 → auto-stop after default-duration */
-          guint32 sessId   = 0;   /* output: filled by nvurisrcbin start-sr */
-          g_signal_emit_by_name(ap->src_bins[src_id], "start-sr",
-                                &sessId, start_time, duration, 2);
-          /* Store the assigned session ID so it can be referenced later
-           * (e.g. for stop-sr, deduplication, or Kafka events). */
-          if (src_id < MAX_RAW_SOURCES)
-            sr_session_ids[src_id] = sessId;
-          GST_DEBUG("[smart-record] start-sr triggered for src=%u frame=%u, sessionId=%u",
-                  src_id, frame_meta->frame_num, sessId);
-        }else {
-          GST_WARNING("[smart-record] skip start-sr for src=%u: state=%s (reconnecting?)",
-                   src_id, gst_element_state_get_name(cur_state));
-        }
-      }
-    }
+    trigger_smart_record(ap, frame_meta);
 
     // Process each object in frame
     GPtrArray *obj_jsons = g_ptr_array_new_with_free_func(g_free);
