@@ -136,6 +136,17 @@ typedef struct {
   guint    container;           /**< 0 = MP4 (default), 1 = MKV */
 } AppSmartRecordConfig;
 
+/** File cleanup configuration
+ *
+ *  Periodically scans output directories (frame_save.dir, smart_record.dir,
+ *  json_save.dir) and deletes files older than max_age_sec.
+ */
+typedef struct {
+  gboolean enabled;           /**< FALSE → cleanup disabled (default) */
+  guint    interval_sec;      /**< how often to run cleanup, default 300 (5 min) */
+  guint    max_age_sec;       /**< delete files older than this, default 3600 (1 hour) */
+} AppFileCleanupConfig;
+
 // =============================================================================
 // Top-level application configuration
 // =============================================================================
@@ -166,6 +177,7 @@ typedef struct {
   AppFrameSaveConfig   frame_save;
   AppJsonSaveConfig    json_save;
   AppSmartRecordConfig smart_record;
+  AppFileCleanupConfig file_cleanup;
 } AppConfig;
 
 /** Single global instance — defined in config.c */

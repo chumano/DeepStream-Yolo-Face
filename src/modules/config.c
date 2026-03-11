@@ -136,6 +136,13 @@ AppConfig app_config = {
     .default_duration_sec = 20,
     .container            = 0,     /* 0 = MP4 */
   },
+
+  /* File cleanup */
+  .file_cleanup = {
+    .enabled      = FALSE,
+    .interval_sec = 300,   /* 5 minutes */
+    .max_age_sec  = 600,  /* 10 minutes */
+  },
 };
 
 
@@ -284,6 +291,11 @@ parse_config_file(const gchar *config_file, GError **error)
   GET_INT ("smart_record", "cache-size",       app_config.smart_record.cache_size_sec);
   GET_INT ("smart_record", "default-duration", app_config.smart_record.default_duration_sec);
   GET_INT ("smart_record", "container",        app_config.smart_record.container);
+
+  /* ── [file_cleanup] ──────────────────────────────────────── */
+  GET_BOOL("file_cleanup", "enabled",      app_config.file_cleanup.enabled);
+  GET_INT ("file_cleanup", "interval",     app_config.file_cleanup.interval_sec);
+  GET_INT ("file_cleanup", "max-age",      app_config.file_cleanup.max_age_sec);
 
 #undef GET_STR
 #undef GET_STR_ARRAY

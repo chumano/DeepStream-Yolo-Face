@@ -8,6 +8,7 @@
 #include "modules/config.h"
 #include "modules/face.h"
 #include "modules/face_analysis.h"
+#include "modules/file_cleanup.h"
 #include "modules/image_processing.h"
 #include "modules/json_builder.h"
 #include "modules/osd_probe.h"
@@ -822,6 +823,11 @@ main(gint argc, char *argv[])
   init_detection_manager();
 
   // ============================================================================
+  // Initialize file cleanup timer (deletes old frames/videos)
+  GST_INFO("Initializing file cleanup...");
+  file_cleanup_start();
+
+  // ============================================================================
   // Initialize raw-frame ring buffer (used for pre-buffer and smart-save modes)
   // Not needed when save_all_frames is true because every frame is written
   // directly to disk by raw_src_appsink_callback.
@@ -917,6 +923,10 @@ main(gint argc, char *argv[])
   // ===============================================
   // Cleanup detection manager
   cleanup_detection_manager();
+
+  // ===============================================
+  // Stop file cleanup timer
+  file_cleanup_stop();
 
   // ===============================================
   // Cleanup pre-detection frame buffer

@@ -29,19 +29,28 @@
   - bounding box need to be adjusted to ensure the correct position on the padded frame image
 - [x] change uridecodebin to nvurisrcbin to support reconnition on RTSP stream with low latency
    - https://docs.nvidia.com/metropolis/deepstream/7.1/text/DS_plugin_gst-nvurisrcbin.html
+```bash
+gst-launch-1.0 nvurisrcbin \
+uri=rtsp://100.64.0.153:8554/test! \
+m.sink_0 nvstreammux name=m width=1280 height=720 batch-size=1 ! nvmultistreamtiler ! nveglglessink
+```
+  
 - [x] support save orginal frame image get directly from source (before the nvstreammux) (configurable)
   - save when face detected (smart saving) or save all frames
   - buffered orginal frame image for a short period of time (e.g. 1 second)  and save the buffered image when face detected
   - support multi source inputs and save original frame image for each source
 - [x] feature smart recording with nvurisrcbin. trigger recording by face detection and save video clip/
   - https://docs.nvidia.com/metropolis/deepstream/7.1/text/DS_Smart_video.html
+
+- [x] smart-record sr-done callback to get the recorded video file path
+   - [ ] send to Kafka
+- [x] clear old images/videos on thread
+
+- [ ] monitor drop frame in nvurisrcbin/rtspsrc
+
 - [ ] frame_buffer push raw frame data, then encode jpeg in buffer worker thread (currently push encoded jpeg data to frame_buffer)
 
-```bash
-gst-launch-1.0 nvurisrcbin \
-uri=rtsp://100.64.0.153:8554/test! \
-m.sink_0 nvstreammux name=m width=1280 height=720 batch-size=1 ! nvmultistreamtiler ! nveglglessink
-```
+### Advanced features
 - [ ] handle dynamic input sources (add/remove camera at runtime) through rest server
   - https://docs.nvidia.com/metropolis/deepstream/7.1/text/DS_plugin_gst-nvmultiurisrcbin.html
 
