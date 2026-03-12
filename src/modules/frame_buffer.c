@@ -1,4 +1,5 @@
 #include "frame_buffer.h"
+#include "image_processing.h"
 #include "utils.h"
 #include <stdio.h>
 #include <string.h>
@@ -16,8 +17,10 @@ GST_DEBUG_CATEGORY_EXTERN(deepstream_debug_category);
 typedef struct {
   guint    frame_num;
   gdouble  timestamp;   /**< seconds */
-  guchar  *jpeg_data;   /**< owned, g_malloc()-allocated */
-  gsize    jpeg_size;
+  guchar  *rgba_data;   /**< owned, g_malloc()-allocated CPU RGBA buffer */
+  guint    width;
+  guint    height;
+  guint    pitch;       /**< row stride in bytes */
 } BufferedFrame;
 
 typedef struct {
@@ -50,6 +53,7 @@ struct _FrameBuffer {
   guint          num_sources;
   gdouble        pre_buffer_duration_sec;
   gchar         *save_dir;             /**< base output directory, owned */
+  gint           jpeg_quality;         /**< JPEG quality used during deferred encode */
 
   /* Async save worker */
   GAsyncQueue   *save_queue;           /**< thread-safe task queue */
@@ -73,7 +77,7 @@ buffered_frame_free(gpointer data)
   if (!data)
     return;
   BufferedFrame *f = (BufferedFrame *)data;
-  g_free(f->jpeg_data);
+  g_free(f->rgba_data);
   g_free(f);
 }
 
@@ -164,20 +168,32 @@ worker_execute_save(FrameBuffer *fb, const SaveTask *task)
 
     if (f->timestamp <= pts_sec + kTolerance) {
       if (f->timestamp >= pts_sec - kTolerance) {
-        /* PTS match — save to disk */
+        /* PTS match — encode JPEG and save to disk */
         gchar *abs_path = build_prebuf_path(fb->save_dir, source_id,
                                             f->frame_num, f->timestamp);
         if (abs_path) {
-          FILE *fp = fopen(abs_path, "wb");
-          if (fp) {
-            fwrite(f->jpeg_data, 1, f->jpeg_size, fp);
-            fclose(fp);
-            GST_DEBUG("frame_buffer: [async] saved pts-matched frame src=%u num=%u pts=%.6f -> %s",
-                      source_id, f->frame_num, f->timestamp, abs_path);
-            flushed++;
-            sb->total_saved++;
+          /* Encode raw RGBA → JPEG in the worker thread (not on the appsink
+           * callback thread), keeping the GStreamer pipeline unblocked. */
+          guchar *jpeg_data = NULL;
+          gsize   jpeg_size = 0;
+          if (encode_rgba_cpu_to_jpeg_mem(f->rgba_data, f->width, f->height,
+                                          f->pitch, fb->jpeg_quality,
+                                          &jpeg_data, &jpeg_size)) {
+            FILE *fp = fopen(abs_path, "wb");
+            if (fp) {
+              fwrite(jpeg_data, 1, jpeg_size, fp);
+              fclose(fp);
+              GST_DEBUG("frame_buffer: [async] encoded+saved pts-matched frame src=%u num=%u pts=%.6f -> %s",
+                        source_id, f->frame_num, f->timestamp, abs_path);
+              flushed++;
+              sb->total_saved++;
+            } else {
+              GST_WARNING("frame_buffer: [async] failed to open %s for writing", abs_path);
+            }
+            g_free(jpeg_data);
           } else {
-            GST_WARNING("frame_buffer: [async] failed to open %s for writing", abs_path);
+            GST_WARNING("frame_buffer: [async] JPEG encode failed for src=%u num=%u",
+                        source_id, f->frame_num);
           }
           g_free(abs_path);
         }
@@ -264,7 +280,7 @@ frame_buffer_log_metrics(FrameBuffer *fb)
     gsize bytes  = 0;
     for (GList *l = sb->frames->head; l; l = l->next) {
       BufferedFrame *f = (BufferedFrame *)l->data;
-      bytes += f->jpeg_size;
+      bytes += (gsize)f->pitch * f->height;  /* raw RGBA size */
     }
 
     GST_INFO("frame_buffer:   src=%u  in_buf=%u  mem=%.1fKB"
@@ -342,7 +358,7 @@ frame_buffer_set_metrics_interval(FrameBuffer *fb, guint interval_sec)
 
 FrameBuffer *
 frame_buffer_new(guint num_sources, gdouble pre_buffer_duration_sec,
-                 const gchar *save_dir)
+                 const gchar *save_dir, gint jpeg_quality)
 {
   if (num_sources == 0 || !save_dir) {
     GST_ERROR("frame_buffer_new: invalid arguments");
@@ -353,6 +369,7 @@ frame_buffer_new(guint num_sources, gdouble pre_buffer_duration_sec,
   fb->num_sources            = num_sources;
   fb->pre_buffer_duration_sec = pre_buffer_duration_sec;
   fb->save_dir               = g_strdup(save_dir);
+  fb->jpeg_quality           = (jpeg_quality > 0 && jpeg_quality <= 100) ? jpeg_quality : 85;
   fb->sources                = g_new0(SourceBuffer, num_sources);
 
   for (guint i = 0; i < num_sources; i++) {
@@ -372,8 +389,8 @@ frame_buffer_new(guint num_sources, gdouble pre_buffer_duration_sec,
   g_cond_init(&fb->metrics_cond);
   fb->metrics_thread = g_thread_new("fb-metrics", metrics_thread_func, fb);
 
-  GST_INFO("frame_buffer: created (sources=%u, pre_buffer=%.2fs, dir=%s)",
-           num_sources, pre_buffer_duration_sec, save_dir);
+  GST_INFO("frame_buffer: created (sources=%u, pre_buffer=%.2fs, dir=%s, jpeg_quality=%d)",
+           num_sources, pre_buffer_duration_sec, save_dir, fb->jpeg_quality);
   return fb;
 }
 
@@ -427,24 +444,27 @@ frame_buffer_free(FrameBuffer *fb)
 
 void
 frame_buffer_push(FrameBuffer *fb, guint source_id, guint frame_num,
-                  gdouble timestamp, guchar *jpeg_data, gsize jpeg_size)
+                  gdouble timestamp, guchar *rgba_data,
+                  guint width, guint height, guint pitch)
 {
-  if (!fb || !jpeg_data || jpeg_size == 0) {
-    g_free(jpeg_data);
+  if (!fb || !rgba_data || width == 0 || height == 0 || pitch == 0) {
+    g_free(rgba_data);
     return;
   }
   if (source_id >= fb->num_sources) {
     GST_WARNING("frame_buffer_push: source_id %u >= num_sources %u",
                 source_id, fb->num_sources);
-    g_free(jpeg_data);
+    g_free(rgba_data);
     return;
   }
 
   BufferedFrame *f = g_new0(BufferedFrame, 1);
   f->frame_num  = frame_num;
   f->timestamp  = timestamp;
-  f->jpeg_data  = jpeg_data;  /* take ownership */
-  f->jpeg_size  = jpeg_size;
+  f->rgba_data  = rgba_data;  /* take ownership */
+  f->width      = width;
+  f->height     = height;
+  f->pitch      = pitch;
 
   SourceBuffer *sb = &fb->sources[source_id];
   g_mutex_lock(&sb->mutex);

@@ -161,18 +161,19 @@ raw_src_appsink_callback(GstElement *appsink, gpointer user_data)
     g_free(rel);
 
   } else if (frame_buffer) {
-    /* ── Mode 2 / smart: push into ring buffer; flush on detection ── */
-    guchar *jpeg_data = NULL;
-    gsize   jpeg_size = 0;
-    if (save_frame_to_jpeg_mem(surface, &fm_local,
-                               app_config.frame_save.quality,
-                               FALSE, &lb_noop,
-                               &jpeg_data, &jpeg_size)) {
+    /* ── Mode 2 / smart: copy GPU surface to CPU RGBA, push raw pixels      ── *
+     *   JPEG encoding is deferred to the worker thread so the appsink          *
+     *   callback (and the GStreamer pipeline) is never blocked by libjpeg.     */
+    guint  raw_w = 0, raw_h = 0, raw_pitch = 0;
+    guchar *rgba_data = surface_slot_to_rgba_cpu(surface, fm_local.batch_id,
+                                                  FALSE, &lb_noop,
+                                                  &raw_w, &raw_h, &raw_pitch);
+    if (rgba_data) {
       frame_buffer_push(frame_buffer, source_id, frame_num,
-                        timestamp, jpeg_data, jpeg_size);
+                        timestamp, rgba_data, raw_w, raw_h, raw_pitch);
       frame_buffer_prune(frame_buffer, source_id, timestamp);
-      GST_TRACE("[raw-tee/buf] src=%u frame=%u ts=%.3f",
-                source_id, frame_num, timestamp);
+      GST_TRACE("[raw-tee/buf] src=%u frame=%u ts=%.3f %ux%u pitch=%u",
+                source_id, frame_num, timestamp, raw_w, raw_h, raw_pitch);
     }
   }
 
@@ -921,7 +922,8 @@ main(gint argc, char *argv[])
              app_config.frame_save.pre_buffer_duration_sec, app_config.source.count);
     frame_buffer = frame_buffer_new(app_config.source.count,
                                     app_config.frame_save.pre_buffer_duration_sec,
-                                    app_config.frame_save.dir);
+                                    app_config.frame_save.dir,
+                                    app_config.frame_save.quality);
     if (!frame_buffer) {
       g_printerr("WARNING - Failed to create frame buffer, buffered saving disabled\n");
     }

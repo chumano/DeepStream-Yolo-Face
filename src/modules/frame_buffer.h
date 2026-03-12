@@ -28,11 +28,13 @@ typedef struct _FrameBuffer FrameBuffer;
  * @param num_sources            Number of video sources (source_id range: 0..num_sources-1)
  * @param pre_buffer_duration_sec Seconds of frames to keep in memory per source
  * @param save_dir               Base output directory (e.g. /app/outputs/frames)
+ * @param jpeg_quality           JPEG quality (1-100) used when encoding frames for disk
  * @return Newly allocated FrameBuffer; free with frame_buffer_free().
  */
 FrameBuffer *frame_buffer_new(guint num_sources,
                                gdouble pre_buffer_duration_sec,
-                               const gchar *save_dir);
+                               const gchar *save_dir,
+                               gint jpeg_quality);
 
 /**
  * Free a FrameBuffer and all buffered frame data.
@@ -40,18 +42,23 @@ FrameBuffer *frame_buffer_new(guint num_sources,
 void frame_buffer_free(FrameBuffer *fb);
 
 /**
- * Push an encoded JPEG frame into the ring buffer for @source_id.
- * The FrameBuffer takes ownership of @jpeg_data (allocated with g_malloc).
+ * Push a raw CPU RGBA frame into the ring buffer for @source_id.
+ * The FrameBuffer takes ownership of @rgba_data (allocated with g_malloc).
+ * JPEG encoding is deferred to the background worker thread and only
+ * performed when the frame is actually selected for saving.
  *
  * @param fb         FrameBuffer instance
  * @param source_id  Source index
  * @param frame_num  Frame counter (used for file naming)
  * @param timestamp  Frame timestamp in seconds (used for pruning and naming)
- * @param jpeg_data  g_malloc()-allocated JPEG bytes (ownership transferred)
- * @param jpeg_size  Size of @jpeg_data in bytes
+ * @param rgba_data  g_malloc()-allocated CPU RGBA buffer (ownership transferred)
+ * @param width      Frame width in pixels
+ * @param height     Frame height in pixels
+ * @param pitch      Row stride in bytes (may be > width*4)
  */
 void frame_buffer_push(FrameBuffer *fb, guint source_id, guint frame_num,
-                       gdouble timestamp, guchar *jpeg_data, gsize jpeg_size);
+                       gdouble timestamp, guchar *rgba_data,
+                       guint width, guint height, guint pitch);
 
 /**
  * Remove frames older than (current_time - pre_buffer_duration_sec) from
