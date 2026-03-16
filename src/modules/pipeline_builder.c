@@ -183,12 +183,12 @@ uridecodebin_child_added_callback(GstChildProxy *child_proxy G_GNUC_UNUSED,
      *                              to a bus ERROR (nvurisrcbin will still
      *                              attempt higher-level reconnects).
      */
-    // g_object_set(object,
-    //              "do-rtsp-keep-alive", FALSE,
-    //              "timeout",           (guint64) 5000000,  /* µs */
-    //              "tcp-timeout",       (guint64) 5000000,  /* µs */
-    //              "retry",             10,
-    //              NULL);
+    g_object_set(object,
+                 "do-rtsp-keep-alive", app_config.rtsp.do_keep_alive,
+                 "timeout",           (guint64)(app_config.rtsp.timeout_sec)     * G_GUINT64_CONSTANT(1000000),
+                 "tcp-timeout",       (guint64)(app_config.rtsp.tcp_timeout_sec) * G_GUINT64_CONSTANT(1000000),
+                 "retry",             app_config.rtsp.retry,
+                 NULL);
 
     /* Register with the pipeline monitor so RTSP/jitterbuffer stats
      * are collected on every report interval. */
@@ -265,8 +265,8 @@ create_nvurisrcbin(guint stream_id, const gchar *uri, SourceBinCtx *ctx,
 
     // set reconection properties for RTSP sources
     g_object_set(G_OBJECT(nvurisrcbin),
-                 "rtsp-reconnect-interval", 15, // Reconnect every 15 seconds
-                 "rtsp-reconnect-attempts", -1, // Retry indefinitely
+                 "rtsp-reconnect-interval", app_config.rtsp.reconnect_interval_sec,
+                 "rtsp-reconnect-attempts", app_config.rtsp.reconnect_attempts,
                   NULL);
 
     /* ── Smart Record ── */

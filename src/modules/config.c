@@ -144,6 +144,16 @@ AppConfig app_config = {
     .interval_sec = 300,   /* 5 minutes */
     .max_age_sec  = 600,  /* 10 minutes */
   },
+
+  /* RTSP connection / timeout */
+  .rtsp = {
+    .reconnect_interval_sec = 15,    /* seconds between reconnect attempts */
+    .reconnect_attempts     = -1,    /* unlimited */
+    .do_keep_alive          = FALSE,
+    .timeout_sec            = 10,    /* RTSP response timeout */
+    .tcp_timeout_sec        = 5,     /* TCP socket timeout */
+    .retry                  = 10,
+  },
 };
 
 
@@ -298,6 +308,14 @@ parse_config_file(const gchar *config_file, GError **error)
   GET_BOOL("file_cleanup", "enabled",      app_config.file_cleanup.enabled);
   GET_INT ("file_cleanup", "interval",     app_config.file_cleanup.interval_sec);
   GET_INT ("file_cleanup", "max-age",      app_config.file_cleanup.max_age_sec);
+
+  /* ── [rtsp] ──────────────────────────────────────────────── */
+  GET_INT ("rtsp", "reconnect-interval",  app_config.rtsp.reconnect_interval_sec);
+  GET_INT ("rtsp", "reconnect-attempts",  app_config.rtsp.reconnect_attempts);
+  GET_BOOL("rtsp", "do-keep-alive",       app_config.rtsp.do_keep_alive);
+  GET_INT ("rtsp", "timeout",             app_config.rtsp.timeout_sec);
+  GET_INT ("rtsp", "tcp-timeout",         app_config.rtsp.tcp_timeout_sec);
+  GET_INT ("rtsp", "retry",               app_config.rtsp.retry);
 
 #undef GET_STR
 #undef GET_STR_ARRAY

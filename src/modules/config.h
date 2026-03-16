@@ -148,6 +148,23 @@ typedef struct {
   guint    max_age_sec;       /**< delete files older than this, default 3600 (1 hour) */
 } AppFileCleanupConfig;
 
+/** RTSP connection and timeout settings
+ *
+ *  nvurisrcbin-level reconnect properties (set directly on the bin) and
+ *  rtspsrc-level timeout properties (set via the child-added callback).
+ */
+typedef struct {
+  /* nvurisrcbin properties */
+  gint  reconnect_interval_sec;  /**< seconds between reconnect attempts; default 15 */
+  gint  reconnect_attempts;      /**< -1 = unlimited; default -1 */
+
+  /* rtspsrc (child element) properties */
+  gboolean do_keep_alive;        /**< RTSP keep-alive RTCP; default FALSE */
+  guint    timeout_sec;          /**< RTSP response timeout in seconds; default 10 */
+  guint    tcp_timeout_sec;      /**< TCP socket timeout in seconds; default 5 */
+  gint     retry;                /**< rtspsrc-level retry count; default 10 */
+} AppRtspConfig;
+
 // =============================================================================
 // Top-level application configuration
 // =============================================================================
@@ -179,6 +196,7 @@ typedef struct {
   AppJsonSaveConfig    json_save;
   AppSmartRecordConfig smart_record;
   AppFileCleanupConfig file_cleanup;
+  AppRtspConfig        rtsp;
 } AppConfig;
 
 /** Single global instance — defined in config.c */
