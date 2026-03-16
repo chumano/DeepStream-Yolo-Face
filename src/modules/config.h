@@ -163,6 +163,8 @@ typedef struct {
   guint    timeout_sec;          /**< RTSP response timeout in seconds; default 10 */
   guint    tcp_timeout_sec;      /**< TCP socket timeout in seconds; default 5 */
   gint     retry;                /**< rtspsrc-level retry count; default 10 */
+  guint    protocols;            /**< GstRTSPLowerTrans flags: 1=udp 2=udp-mcast 4=tcp;
+                                      default 7 (tcp+udp-mcast+udp) */
 } AppRtspConfig;
 
 // =============================================================================

@@ -153,6 +153,7 @@ AppConfig app_config = {
     .timeout_sec            = 10,    /* RTSP response timeout */
     .tcp_timeout_sec        = 5,     /* TCP socket timeout */
     .retry                  = 10,
+    .protocols              = 7,     /* 0x7 = tcp+udp-mcast+udp (GstRTSPLowerTrans default) */
   },
 };
 
@@ -316,6 +317,7 @@ parse_config_file(const gchar *config_file, GError **error)
   GET_INT ("rtsp", "timeout",             app_config.rtsp.timeout_sec);
   GET_INT ("rtsp", "tcp-timeout",         app_config.rtsp.tcp_timeout_sec);
   GET_INT ("rtsp", "retry",               app_config.rtsp.retry);
+  GET_INT ("rtsp", "protocols",           app_config.rtsp.protocols);
 
 #undef GET_STR
 #undef GET_STR_ARRAY

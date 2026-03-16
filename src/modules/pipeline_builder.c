@@ -188,6 +188,7 @@ uridecodebin_child_added_callback(GstChildProxy *child_proxy G_GNUC_UNUSED,
                  "timeout",           (guint64)(app_config.rtsp.timeout_sec)     * G_GUINT64_CONSTANT(1000000),
                  "tcp-timeout",       (guint64)(app_config.rtsp.tcp_timeout_sec) * G_GUINT64_CONSTANT(1000000),
                  "retry",             app_config.rtsp.retry,
+                 "protocols",         app_config.rtsp.protocols,
                  NULL);
 
     /* Register with the pipeline monitor so RTSP/jitterbuffer stats
