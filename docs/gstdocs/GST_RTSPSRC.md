@@ -189,7 +189,7 @@ Element Properties:
                         Boolean. Default: false
   tcp-timeout         : Fail after timeout microseconds on TCP connections (0 = disabled)
                         flags: readable, writable
-                        Unsigned Integer64. Range: 0 - 18446744073709551615 Default: 20000000 
+                        Unsigned Integer64. Range: 0 - 18446744073709551615 Default: 20000000 // 20 seconds 
   teardown-timeout    : When transitioning PAUSED-READY, allow up to timeout (in nanoseconds) delay in order to send teardown (0 = disabled)
                         flags: readable, writable
                         Unsigned Integer64. Range: 0 - 18446744073709551615 Default: 100000000 

@@ -155,6 +155,12 @@ AppConfig app_config = {
     .retry                  = 10,
     .protocols              = 7,     /* 0x7 = tcp+udp-mcast+udp (GstRTSPLowerTrans default) */
   },
+
+  /* Performance monitor / exit on zero FPS */
+  .perf_monitor = {
+    .enabled                = FALSE,
+    .zero_fps_timeout_sec   = 60,    /* 1 minute */
+  },
 };
 
 
@@ -318,6 +324,10 @@ parse_config_file(const gchar *config_file, GError **error)
   GET_INT ("rtsp", "tcp-timeout",         app_config.rtsp.tcp_timeout_sec);
   GET_INT ("rtsp", "retry",               app_config.rtsp.retry);
   GET_INT ("rtsp", "protocols",           app_config.rtsp.protocols);
+
+  /* ── [perf_monitor] ──────────────────────────────────────── */
+  GET_BOOL("perf_monitor", "enabled",             app_config.perf_monitor.enabled);
+  GET_INT ("perf_monitor", "zero-fps-timeout",    app_config.perf_monitor.zero_fps_timeout_sec);
 
 #undef GET_STR
 #undef GET_STR_ARRAY
@@ -568,6 +578,16 @@ static void print_app_config(void) {
   g_print("\n  infer2 (triton): config_file=%s qos=%s",
     app_config.infer2.config_file ? app_config.infer2.config_file : "(disabled)",
     app_config.infer2.qos ? "TRUE" : "FALSE");
+  // print rtsp settings
+  g_print("\n  rtsp: reconnect_interval_sec=%u reconnect_attempts=%d do_keep_alive=%s timeout_sec=%u tcp_timeout_sec=%u retry=%u protocols=0x%X",
+    app_config.rtsp.reconnect_interval_sec,
+    app_config.rtsp.reconnect_attempts,
+    app_config.rtsp.do_keep_alive ? "TRUE" : "FALSE",
+    app_config.rtsp.timeout_sec,
+    app_config.rtsp.tcp_timeout_sec,
+    app_config.rtsp.retry,
+    app_config.rtsp.protocols);
+
   g_print("\n  tracker: width=%u height=%u ll_lib_file=%s ll_config_file=%s display_tracking_id=%s",
     app_config.tracker.width,
     app_config.tracker.height,

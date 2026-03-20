@@ -90,7 +90,7 @@ run_rtsp: clean_images $(APP)
 	-s rtsp://100.64.0.153:8554/test
 
 run_rtsp_debug: clean_images $(APP)
-	GST_DEBUG=$(LOG_APP):$(LOG) gdb --args ./$(APP) --config /app/configs/app.ini \
+	GST_DEBUG=3,$(LOG_APP):$(LOG),rtsp*:3,rtspsrc:3,nvurisrcbin:6 GST_DEBUG_FILE=trace.log gdb --args ./$(APP) --config /app/configs/app.ini \
 		-s rtsp://100.64.0.153:8554/test
 
 run_rtsp_valgrind: clean_images $(APP)

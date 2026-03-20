@@ -167,6 +167,16 @@ typedef struct {
                                       default 7 (tcp+udp-mcast+udp) */
 } AppRtspConfig;
 
+/** Performance monitoring & exit-on-stall
+ *
+ *  Automatically exit the application if any stream's FPS drops to zero
+ *  and remains zero for the configured timeout duration.
+ */
+typedef struct {
+  gboolean enabled;             /**< TRUE → monitor FPS and exit on stall; default FALSE */
+  guint    zero_fps_timeout_sec;/**< seconds of zero FPS before exiting; default 60 */
+} AppPerfMonitorConfig;
+
 // =============================================================================
 // Top-level application configuration
 // =============================================================================
@@ -199,6 +209,7 @@ typedef struct {
   AppSmartRecordConfig smart_record;
   AppFileCleanupConfig file_cleanup;
   AppRtspConfig        rtsp;
+  AppPerfMonitorConfig perf_monitor;
 } AppConfig;
 
 /** Single global instance — defined in config.c */

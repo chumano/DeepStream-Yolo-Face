@@ -269,7 +269,7 @@ frame_buffer_log_metrics(FrameBuffer *fb)
   guint   total_queued = 0;
   gsize   total_bytes  = 0;
 
-  GST_INFO("frame_buffer: === metrics (sources=%u, interval=%us) ===",
+  GST_DEBUG("frame_buffer: === metrics (sources=%u, interval=%us) ===",
            fb->num_sources, fb->metrics_interval_sec);
 
   for (guint i = 0; i < fb->num_sources; i++) {
@@ -283,7 +283,7 @@ frame_buffer_log_metrics(FrameBuffer *fb)
       bytes += (gsize)f->pitch * f->height;  /* raw RGBA size */
     }
 
-    GST_INFO("frame_buffer:   src=%u  in_buf=%u  mem=%.1fKB"
+    GST_DEBUG("frame_buffer:   src=%u  in_buf=%u  mem=%.1fKB"
              "  pushed=%" G_GUINT64_FORMAT
              "  saved=%" G_GUINT64_FORMAT
              "  pruned=%" G_GUINT64_FORMAT,
@@ -299,7 +299,7 @@ frame_buffer_log_metrics(FrameBuffer *fb)
   }
 
   gint queue_len = fb->save_queue ? g_async_queue_length(fb->save_queue) : 0;
-  GST_INFO("frame_buffer: --- total  in_buf=%u  mem=%.1fKB"
+  GST_DEBUG("frame_buffer: --- total  in_buf=%u  mem=%.1fKB"
            "  pushed=%" G_GUINT64_FORMAT
            "  saved=%" G_GUINT64_FORMAT
            "  pruned=%" G_GUINT64_FORMAT

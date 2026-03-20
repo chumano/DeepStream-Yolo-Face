@@ -1,11 +1,16 @@
 #include <math.h>
 #include <sys/time.h>
+#include <stdlib.h>
 
 #include "perf.h"
+#include "config.h"
 
 static GMutex fps_lock;
 static gdouble fps[MAX_SOURCE_BINS];
 static gdouble fps_avg[MAX_SOURCE_BINS];
+
+/** Track zero-FPS start timestamp for each source (0 = FPS is non-zero) */
+static time_t zero_fps_start[MAX_SOURCE_BINS];
 
 void
 perf_cb(gpointer context, NvDsAppPerfStruct *str)
@@ -20,6 +25,39 @@ perf_cb(gpointer context, NvDsAppPerfStruct *str)
   for (i = 0; i < numf; ++i) {
     g_print("DEBUG - FPS of stream %d: %.2f (avg: %.2f)\n", i + 1, fps[i], fps_avg[i]);
   }
+
+  /* Check for zero FPS timeout if enabled */
+  if (app_config.perf_monitor.enabled) {
+    time_t now = time(NULL);
+    for (i = 0; i < numf; ++i) {
+      if (fps[i] == 0.0) {
+        /* FPS is zero */
+        if (zero_fps_start[i] == 0) {
+          /* First time seeing zero FPS for this source */
+          zero_fps_start[i] = now;
+          g_print("WARNING - Stream %d FPS dropped to zero at %ld\n", i + 1, now);
+        } else {
+          /* FPS has been zero for some time - check if timeout exceeded */
+          time_t zero_duration = now - zero_fps_start[i];
+          if (zero_duration >= app_config.perf_monitor.zero_fps_timeout_sec) {
+            g_print("FATAL - Stream %d FPS has been zero for %ld seconds (threshold: %u seconds)\n",
+                    i + 1, zero_duration, app_config.perf_monitor.zero_fps_timeout_sec);
+            g_print("Exiting application due to stream stall...\n");
+            g_mutex_unlock(&fps_lock);
+            exit(1);
+          }
+        }
+      } else {
+        /* FPS is non-zero - reset the zero-FPS timer for this source */
+        if (zero_fps_start[i] != 0) {
+          g_print("INFO - Stream %d FPS recovered (was zero for %ld seconds)\n",
+                  i + 1, now - zero_fps_start[i]);
+          zero_fps_start[i] = 0;
+        }
+      }
+    }
+  }
+
   g_mutex_unlock(&fps_lock);
 }
 
