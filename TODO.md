@@ -47,6 +47,19 @@ m.sink_0 nvstreammux name=m width=1280 height=720 batch-size=1 ! nvmultistreamti
 - [x] clear old images/videos on thread
 - [x] monitor drop frame in nvurisrcbin/rtspsrc
 
+- [x] sink to rtsp server
+```bash
+gst-launch-1.0 -e \
+filesrc location=/app/videos/friends_short.mp4 ! \
+ qtdemux ! \
+  h264parse ! \
+  nvv4l2decoder ! \
+  nvvideoconvert ! \
+  nvv4l2h264enc bitrate=4000000 ! \
+  h264parse ! \
+rtspclientsink location=rtsp://100.64.0.153:8554/analysis  protocols=tcp
+```
+
 - [ ] frame_buffer push raw frame data, then encode jpeg in buffer worker thread when need to save (currently push encoded jpeg data to frame_buffer)
 
 

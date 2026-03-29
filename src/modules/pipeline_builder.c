@@ -613,6 +613,77 @@ create_app_pipeline(GMainLoop *loop, GCallback appsink_callback,
   }
 
   // ---------------------------------------------------------------------------
+  // RTSP sink branch — push to external RTSP server (conditional)
+  if (app_config.rtsp_sink.enabled) {
+    if (!app_config.rtsp_sink.location || app_config.rtsp_sink.location[0] == '\0') {
+      g_printerr("ERROR - rtsp_sink enabled but no location configured\n");
+      goto fail;
+    }
+
+    ap->queue_rtsp = gst_element_factory_make("queue", "queue_rtsp");
+    if (!ap->queue_rtsp || !gst_bin_add(GST_BIN(ap->pipeline), ap->queue_rtsp)) {
+      g_printerr("ERROR - Failed to create queue_rtsp\n");
+      goto fail;
+    }
+    g_object_set(G_OBJECT(ap->queue_rtsp),
+                 "max-size-buffers", app_config.queue.max_size_buffers,
+                 "leaky", app_config.queue.leaky,
+                 NULL);
+
+    ap->nvvidconv_rtsp = gst_element_factory_make("nvvideoconvert", "nvvidconv_rtsp");
+    if (!ap->nvvidconv_rtsp || !gst_bin_add(GST_BIN(ap->pipeline), ap->nvvidconv_rtsp)) {
+      g_printerr("ERROR - Failed to create nvvidconv_rtsp\n");
+      goto fail;
+    }
+
+    ap->capsfilter_rtsp = gst_element_factory_make("capsfilter", "capsfilter_rtsp");
+    if (!ap->capsfilter_rtsp || !gst_bin_add(GST_BIN(ap->pipeline), ap->capsfilter_rtsp)) {
+      g_printerr("ERROR - Failed to create capsfilter_rtsp\n");
+      goto fail;
+    }
+    {
+      GstCaps *rtsp_caps = gst_caps_from_string("video/x-raw(memory:NVMM), format=NV12");
+      g_object_set(G_OBJECT(ap->capsfilter_rtsp), "caps", rtsp_caps, NULL);
+      gst_caps_unref(rtsp_caps);
+    }
+
+    /* Encoder: nvv4l2h264enc (enc_type=0=H264) or nvv4l2h265enc (enc_type=1=H265)
+     * bitrate in bps, iframeinterval in frames */
+    gboolean use_h265 = (app_config.rtsp_sink.enc_type == 1);
+    const gchar *enc_name   = use_h265 ? "nvv4l2h265enc" : "nvv4l2h264enc";
+    const gchar *parse_name = use_h265 ? "h265parse"     : "h264parse";
+
+    ap->encoder_rtsp = gst_element_factory_make(enc_name, "encoder_rtsp");
+    if (!ap->encoder_rtsp || !gst_bin_add(GST_BIN(ap->pipeline), ap->encoder_rtsp)) {
+      g_printerr("ERROR - Failed to create %s\n", enc_name);
+      goto fail;
+    }
+    g_object_set(G_OBJECT(ap->encoder_rtsp),
+                 "bitrate",        app_config.rtsp_sink.bitrate,
+                 "iframeinterval", app_config.rtsp_sink.iframeinterval,
+                 NULL);
+
+    /* h264parse / h265parse: normalises encoder output so rtspclientsink can
+     * negotiate caps directly (no rtph264pay needed) */
+    ap->parse_rtsp = gst_element_factory_make(parse_name, "parse_rtsp");
+    if (!ap->parse_rtsp || !gst_bin_add(GST_BIN(ap->pipeline), ap->parse_rtsp)) {
+      g_printerr("ERROR - Failed to create %s\n", parse_name);
+      goto fail;
+    }
+
+    ap->rtspclientsink = gst_element_factory_make("rtspclientsink", "rtspclientsink");
+    if (!ap->rtspclientsink || !gst_bin_add(GST_BIN(ap->pipeline), ap->rtspclientsink)) {
+      g_printerr("ERROR - Failed to create rtspclientsink\n");
+      goto fail;
+    }
+    g_object_set(G_OBJECT(ap->rtspclientsink),
+                 "location",  app_config.rtsp_sink.location,
+                 "protocols", 4,   /* TCP */
+                 NULL);
+    g_print("RTSP sink enabled: pushing to %s\n", app_config.rtsp_sink.location);
+  }
+
+  // ---------------------------------------------------------------------------
   // Application sink branch
   ap->queue_app = gst_element_factory_make("queue", "queue_app");
   if (!ap->queue_app || !gst_bin_add(GST_BIN(ap->pipeline), ap->queue_app)) {
@@ -720,27 +791,79 @@ create_app_pipeline(GMainLoop *loop, GCallback appsink_callback,
   }
 
   //   tee -> queue_app -> appsink
-  if (!gst_element_link_many(ap->tee, ap->queue_app, ap->appsink, NULL)) {
-    g_printerr("ERROR - Failed to link tee to appsink\n");
-    goto fail;
-  }
-
-  //   tee -> display branch  (or fakesink when display is disabled)
-  if (!app_config.display.disabled) {
-    if (!gst_element_link_many(ap->tee, ap->queue_display, ap->nvosd,
-                               ap->nvsink, NULL)) {
-      g_printerr("ERROR - Failed to link tee to display sink\n");
+  {
+    GstPad *tee_src = gst_element_get_request_pad(ap->tee, "src_%u");
+    GstPad *queue_sink = gst_element_get_static_pad(ap->queue_app, "sink");
+    if (!tee_src || !queue_sink || gst_pad_link(tee_src, queue_sink) != GST_PAD_LINK_OK) {
+      g_printerr("ERROR - Failed to link tee to queue_app\n");
+      if (tee_src) gst_object_unref(tee_src);
+      if (queue_sink) gst_object_unref(queue_sink);
       goto fail;
     }
-  } else {
+    gst_object_unref(tee_src);
+    gst_object_unref(queue_sink);
+    if (!gst_element_link(ap->queue_app, ap->appsink)) {
+      g_printerr("ERROR - Failed to link queue_app to appsink\n");
+      goto fail;
+    }
+  }
+
+  //   tee -> display branch  (or fakesink when display and rtsp_sink are both disabled)
+  if (!app_config.display.disabled) {
+    GstPad *tee_src = gst_element_get_request_pad(ap->tee, "src_%u");
+    GstPad *queue_sink = gst_element_get_static_pad(ap->queue_display, "sink");
+    if (!tee_src || !queue_sink || gst_pad_link(tee_src, queue_sink) != GST_PAD_LINK_OK) {
+      g_printerr("ERROR - Failed to link tee to queue_display\n");
+      if (tee_src) gst_object_unref(tee_src);
+      if (queue_sink) gst_object_unref(queue_sink);
+      goto fail;
+    }
+    gst_object_unref(tee_src);
+    gst_object_unref(queue_sink);
+    if (!gst_element_link_many(ap->queue_display, ap->nvosd, ap->nvsink, NULL)) {
+      g_printerr("ERROR - Failed to link display chain\n");
+      goto fail;
+    }
+  } else if (!app_config.rtsp_sink.enabled) {
     GstElement *fakesink = gst_element_factory_make("fakesink", "fakesink");
     if (!fakesink || !gst_bin_add(GST_BIN(ap->pipeline), fakesink)) {
       g_printerr("ERROR - Failed to create fakesink\n");
       goto fail;
     }
     g_object_set(G_OBJECT(fakesink), "async", FALSE, "sync", FALSE, NULL);
-    if (!gst_element_link_many(ap->tee, fakesink, NULL)) {
+    GstPad *tee_src = gst_element_get_request_pad(ap->tee, "src_%u");
+    GstPad *fake_sink = gst_element_get_static_pad(fakesink, "sink");
+    if (!tee_src || !fake_sink || gst_pad_link(tee_src, fake_sink) != GST_PAD_LINK_OK) {
       g_printerr("ERROR - Failed to link tee to fakesink\n");
+      if (tee_src) gst_object_unref(tee_src);
+      if (fake_sink) gst_object_unref(fake_sink);
+      goto fail;
+    }
+    gst_object_unref(tee_src);
+    gst_object_unref(fake_sink);
+  }
+
+  //   tee -> rtsp branch: queue_rtsp → nvvidconv_rtsp → capsfilter_rtsp → encoder → parse → rtspclientsink
+  if (app_config.rtsp_sink.enabled) {
+    GstPad *tee_src = gst_element_get_request_pad(ap->tee, "src_%u");
+    GstPad *queue_sink = gst_element_get_static_pad(ap->queue_rtsp, "sink");
+    if (!tee_src || !queue_sink || gst_pad_link(tee_src, queue_sink) != GST_PAD_LINK_OK) {
+      g_printerr("ERROR - Failed to link tee to queue_rtsp\n");
+      if (tee_src) gst_object_unref(tee_src);
+      if (queue_sink) gst_object_unref(queue_sink);
+      goto fail;
+    }
+    gst_object_unref(tee_src);
+    gst_object_unref(queue_sink);
+    if (!gst_element_link_many(ap->queue_rtsp, ap->nvvidconv_rtsp,
+                               ap->capsfilter_rtsp, ap->encoder_rtsp,
+                               ap->parse_rtsp, NULL)) {
+      g_printerr("ERROR - Failed to link RTSP encode chain\n");
+      goto fail;
+    }
+    /* rtspclientsink uses request pads; gst_element_link handles that */
+    if (!gst_element_link(ap->parse_rtsp, ap->rtspclientsink)) {
+      g_printerr("ERROR - Failed to link parse_rtsp to rtspclientsink\n");
       goto fail;
     }
   }

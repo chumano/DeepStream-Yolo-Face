@@ -161,6 +161,15 @@ AppConfig app_config = {
     .enabled                = FALSE,
     .zero_fps_timeout_sec   = 60,    /* 1 minute */
   },
+
+  /* RTSP output sink (push to external server) */
+  .rtsp_sink = {
+    .enabled        = FALSE,
+    .location       = NULL,
+    .enc_type       = 0,        /* H264 */
+    .bitrate        = 4000000,  /* 4 Mbps */
+    .iframeinterval = 30,
+  },
 };
 
 
@@ -328,6 +337,13 @@ parse_config_file(const gchar *config_file, GError **error)
   /* ── [perf_monitor] ──────────────────────────────────────── */
   GET_BOOL("perf_monitor", "enabled",             app_config.perf_monitor.enabled);
   GET_INT ("perf_monitor", "zero-fps-timeout",    app_config.perf_monitor.zero_fps_timeout_sec);
+
+  /* ── [rtsp_sink] ─────────────────────────────────────────── */
+  GET_BOOL("rtsp_sink", "enabled",         app_config.rtsp_sink.enabled);
+  GET_STR ("rtsp_sink", "location",        app_config.rtsp_sink.location);
+  GET_INT ("rtsp_sink", "enc-type",        app_config.rtsp_sink.enc_type);
+  GET_INT ("rtsp_sink", "bitrate",         app_config.rtsp_sink.bitrate);
+  GET_INT ("rtsp_sink", "iframeinterval",  app_config.rtsp_sink.iframeinterval);
 
 #undef GET_STR
 #undef GET_STR_ARRAY
@@ -648,9 +664,16 @@ static void print_app_config(void) {
     app_config.smart_record.cache_size_sec,
     app_config.smart_record.default_duration_sec,
     app_config.smart_record.container);
-  g_print("\n  json_save: enabled=%s dir=%s\n==========================\n\n",
+  g_print("\n  json_save: enabled=%s dir=%s",
     app_config.json_save.enabled ? "TRUE" : "FALSE",
     app_config.json_save.dir ? app_config.json_save.dir : "(none)");
+  g_print("\n  rtsp_sink: enabled=%s location=%s enc_type=%u bitrate=%u iframeinterval=%u"
+          "\n==========================\n\n",
+    app_config.rtsp_sink.enabled ? "TRUE" : "FALSE",
+    app_config.rtsp_sink.location ? app_config.rtsp_sink.location : "(none)",
+    app_config.rtsp_sink.enc_type,
+    app_config.rtsp_sink.bitrate,
+    app_config.rtsp_sink.iframeinterval);
 }
 
 // =============================================================================
@@ -699,4 +722,7 @@ config_free(void)
 
   g_free(app_config.smart_record.file_prefix);
   app_config.smart_record.file_prefix = NULL;
+
+  g_free(app_config.rtsp_sink.location);
+  app_config.rtsp_sink.location = NULL;
 }

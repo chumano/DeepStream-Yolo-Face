@@ -89,6 +89,10 @@ run_rtsp: clean_images $(APP)
 	GST_DEBUG=$(LOG_APP):$(LOG) ./$(APP) --config /app/configs/app.ini \
 	-s rtsp://100.64.0.153:8554/test
 
+run_rtsp_live: clean_images $(APP)
+	GST_DEBUG=$(LOG_APP):$(LOG) ./$(APP) --config /app/configs/app_live.ini \
+	-s rtsp://100.64.0.153:8554/live
+
 run_rtsp_debug: clean_images $(APP)
 	GST_DEBUG=3,$(LOG_APP):$(LOG),rtsp*:3,rtspsrc:3,nvurisrcbin:6 GST_DEBUG_FILE=trace.log gdb --args ./$(APP) --config /app/configs/app.ini \
 		-s rtsp://100.64.0.153:8554/test
@@ -102,6 +106,10 @@ run_rtsp_valgrind: clean_images $(APP)
 run_2infer: clean_images $(APP)
 	GST_DEBUG=$(LOG_APP):$(LOG) ./$(APP) --config /app/configs/app2.ini \
 	-s file:///app/videos/myface.mp4
+
+run_2infer_live: clean_images $(APP)
+	GST_DEBUG=$(LOG_APP):$(LOG) ./$(APP) --config /app/configs/app2_live.ini \
+	-s rtsp://100.64.0.153:8554/live
 
 run_my: clean_images $(APP)
 	GST_DEBUG=$(LOG_APP):$(LOG) ./$(APP) --config /app/configs/app.ini \

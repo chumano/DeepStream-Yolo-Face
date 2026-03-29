@@ -39,6 +39,18 @@ typedef struct {
   GstElement *queue_app;
   GstElement *appsink;
 
+  /* RTSP sink branch (NULL when app_config.rtsp_sink.enabled == FALSE)
+   * Topology: queue_rtsp → nvvidconv_rtsp → capsfilter_rtsp (NV12)
+   *           → encoder_rtsp (nvv4l2h264enc / nvv4l2h265enc)
+   *           → parse_rtsp   (h264parse / h265parse)
+   *           → rtspclientsink (pushes to external RTSP server) */
+  GstElement *queue_rtsp;
+  GstElement *nvvidconv_rtsp;
+  GstElement *capsfilter_rtsp;
+  GstElement *encoder_rtsp;
+  GstElement *parse_rtsp;
+  GstElement *rtspclientsink;
+
   /* Bus watch id — kept for g_source_remove() during cleanup */
   guint bus_watch_id;
 

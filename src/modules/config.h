@@ -177,6 +177,23 @@ typedef struct {
   guint    zero_fps_timeout_sec;/**< seconds of zero FPS before exiting; default 60 */
 } AppPerfMonitorConfig;
 
+/** RTSP output sink — push to an external RTSP server
+ *
+ *  When enabled, adds a third branch on the post-inference tee that encodes
+ *  the video and pushes it to an external RTSP server (e.g. MediaMTX,
+ *  rtsp-simple-server, Wowza) using rtspclientsink.
+ *
+ *  Encoder used:  nvv4l2h264enc (H264) or nvv4l2h265enc (H265)
+ */
+typedef struct {
+  gboolean enabled;        /**< FALSE → RTSP sink disabled (default) */
+  gchar   *location;       /**< full RTSP URL of the target server,
+                                e.g. rtsp://media-server:8554/live/stream */
+  guint    enc_type;       /**< 0=H264, 1=H265; default 0 */
+  guint    bitrate;        /**< encoding bitrate in bps; default 4000000 */
+  guint    iframeinterval; /**< IDR frame interval; default 30 */
+} AppRtspSinkConfig;
+
 // =============================================================================
 // Top-level application configuration
 // =============================================================================
@@ -210,6 +227,7 @@ typedef struct {
   AppFileCleanupConfig file_cleanup;
   AppRtspConfig        rtsp;
   AppPerfMonitorConfig perf_monitor;
+  AppRtspSinkConfig    rtsp_sink;
 } AppConfig;
 
 /** Single global instance — defined in config.c */
