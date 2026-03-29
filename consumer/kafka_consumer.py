@@ -656,17 +656,19 @@ class DetectionPrinter:
 
 
 class FaceDetectionConsumer:
-    """Main consumer class for face detections."""
-    
+    """Main consumer class for face and traffic detections."""
+
     def __init__(self, config: Config):
         self.config = config
         self.storage = FaceStorage(config)
         self.embedding_service = EmbeddingService(config)
         self.printer = DetectionPrinter(config)
         self.consumer: Optional[KafkaConsumer] = None
-        
+
         # Statistics
         self.message_count = 0
+        self.face_count = 0
+        self.traffic_count = 0
         self.images_saved = 0
         self.embeddings_saved = 0
         self.start_time = time.time()
@@ -720,7 +722,7 @@ class FaceDetectionConsumer:
             else:
                 logger.info("Annotated frame saving disabled")
             
-            logger.info("Listening for face detection events...")
+            logger.info("Listening for face and traffic detection events...")
             
             self._consume_messages()
         
@@ -745,8 +747,17 @@ class FaceDetectionConsumer:
             except Exception as e:
                 logger.error(f"Error processing message: {e}", exc_info=True)
     
+    @staticmethod
+    def _get_event_type(message: Any) -> str:
+        """Extract event_type from Kafka message headers, defaulting to 'face_detection'."""
+        if message.headers:
+            for key, value in message.headers:
+                if key == "event_type":
+                    return value.decode("utf-8") if isinstance(value, bytes) else value
+        return "face_detection"
+
     def _process_message(self, message: Any) -> None:
-        """Process a single message."""
+        """Process a single message, routing by event_type header."""
         self.message_count += 1
         detection = message.value
 
@@ -755,13 +766,22 @@ class FaceDetectionConsumer:
             logger.error("⚠️ Message could not be deserialized as JSON.")
             logger.error(f"Raw message: {detection['_raw_message']!r}")
             logger.error(f"Deserialization error: {detection.get('_error')}")
-            # exit program
             print("\nExiting due to deserialization error.")
             sys.exit(1)
             return
 
-        self.printer.print_detection(detection, message.partition, message.offset)
-        
+        event_type = self._get_event_type(message)
+
+        if event_type == "traffic_detection":
+            self._process_traffic_message(detection, message.partition, message.offset)
+        else:
+            self._process_face_message(detection, message.partition, message.offset)
+
+    def _process_face_message(self, detection: Dict[str, Any], partition: int, offset: int) -> None:
+        """Process a face detection message."""
+        self.face_count += 1
+        self.printer.print_detection(detection, partition, offset)
+
         # Save raw face image
         saved_path = self.storage.save_face_image(detection)
         if saved_path:
@@ -775,6 +795,35 @@ class FaceDetectionConsumer:
 
         # Save aligned face and generate embedding
         self._process_aligned_face(detection)
+
+    def _process_traffic_message(self, detection: Dict[str, Any], partition: int, offset: int) -> None:
+        """Process a traffic object detection message."""
+        self.traffic_count += 1
+        source_id = detection.get("source_id", 0)
+        object_id = detection.get("object_id", 0)
+        frame_num = detection.get("frame_number", 0)
+        label = detection.get("label", "unknown")
+        class_id = detection.get("class_id", -1)
+        confidence = detection.get("confidence", 0.0)
+        ts = detection.get("timestamp", 0.0)
+        bbox = detection.get("bbox", {})
+
+        try:
+            ts_human = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        except Exception:
+            ts_human = str(ts)
+
+        logger.info("\n--- Traffic Detection ---")
+        logger.info(f"Partition: {partition}, Offset: {offset}")
+        logger.info(f"Source ID: {source_id}  Frame: {frame_num}")
+        logger.info(f"Object ID: {object_id}  Class: {class_id} ({label})")
+        logger.info(f"Confidence: {confidence:.4f}")
+        logger.info(f"Timestamp: {ts} ({ts_human})")
+        if bbox:
+            logger.info(
+                f"BBox: [{bbox.get('left', 0):.0f}, {bbox.get('top', 0):.0f}, "
+                f"{bbox.get('width', 0):.0f}, {bbox.get('height', 0):.0f}]"
+            )
     
     def _process_aligned_face(self, detection: Dict[str, Any]) -> None:
         """Process aligned face and generate embedding."""
@@ -830,10 +879,12 @@ class FaceDetectionConsumer:
         if elapsed_since_stats >= self.config.stats_interval:
             total_elapsed = current_time - self.start_time
             avg_msg_per_sec = self.message_count / total_elapsed if total_elapsed > 0 else 0
-            
+
             logger.info(f"\n{'='*50}")
             logger.info("STATISTICS:")
             logger.info(f"  Total Messages: {self.message_count}")
+            logger.info(f"    Face Detections:    {self.face_count}")
+            logger.info(f"    Traffic Detections: {self.traffic_count}")
             logger.info(f"  Images Saved: {self.images_saved}")
             logger.info(f"  Embeddings Saved: {self.embeddings_saved}")
             logger.info(f"  Total Time: {total_elapsed:.1f}s")
@@ -850,6 +901,8 @@ class FaceDetectionConsumer:
             avg_rate = self.message_count / total_time
             logger.info("\nFINAL STATISTICS:")
             logger.info(f"  Total Messages: {self.message_count}")
+            logger.info(f"    Face Detections:    {self.face_count}")
+            logger.info(f"    Traffic Detections: {self.traffic_count}")
             logger.info(f"  Images Saved: {self.images_saved}")
             logger.info(f"  Embeddings Saved: {self.embeddings_saved}")
             logger.info(f"  Total Time: {total_time:.1f}s")

@@ -351,7 +351,7 @@ calculate_crop_box(NvDsObjectMeta *obj_meta, CropBox *crop_box,
  * The caller is responsible for g_free()-ing the returned string.
  */
 static gchar *
-process_object(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta, NvBufSurface *surface,
+process_face_object(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta, NvBufSurface *surface,
     gchar* frame_image_path, LetterboxGeometry *lb_geom)
 {
   gdouble frame_timestamp = 0.0;
@@ -501,7 +501,7 @@ process_traffic_object(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta,
                                       FALSE, (gdouble)obj_meta->confidence);
   }
 
-  return build_generic_object_json(
+  gchar *json_data = build_generic_object_json(
       frame_meta->source_id,
       (guint)frame_meta->frame_num,
       frame_timestamp,
@@ -514,6 +514,13 @@ process_traffic_object(NvDsFrameMeta *frame_meta, NvDsObjectMeta *obj_meta,
       (guint)obj_meta->rect_params.width,
       (guint)obj_meta->rect_params.height,
       obj_meta->unique_component_id);
+
+  if (app_config.kafka.enabled && detection_manager &&
+      detection_manager_is_enabled(detection_manager) && json_data) {
+    detection_manager_send_event(detection_manager, "traffic_detection", json_data);
+  }
+
+  return json_data;
 }
 
 /**
@@ -710,7 +717,7 @@ appsink_new_sample_callback(GstElement *appsink, gpointer user_data)
         obj_json = process_traffic_object(frame_meta, obj_meta, image_rel_path);
       } else {
         // Primary inference (face / infer) — full face pipeline
-        obj_json = process_object(frame_meta, obj_meta, surface, image_rel_path, 
+        obj_json = process_face_object(frame_meta, obj_meta, surface, image_rel_path, 
                     &lb_geom);
       }
 

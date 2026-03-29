@@ -78,3 +78,8 @@ m.sink_0 nvstreammux name=m width=1280 height=720 batch-size=1 ! nvmultistreamti
 
 ## RTSP
 - SEI Injection:  SEI (Supplemental Enhancement Information)
+
+
+ GST_DEBUG=3,v4l2:5 gst-launch-1.0 filesrc location=/app/videos/friends.mp4 ! \
+    qtdemux ! h264parse ! nvv4l2decoder ! \
+    "video/x-raw(memory:NVMM)" ! nvvideoconvert ! "video/x-raw" ! fakesink

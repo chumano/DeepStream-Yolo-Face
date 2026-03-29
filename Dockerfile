@@ -1,7 +1,5 @@
 ARG DEEPSTREAM_VERSION=7.1
 
-
-
 ARG BASE_IMAGE=nvcr.io/nvidia/deepstream:${DEEPSTREAM_VERSION}-gc-triton-devel
 
 FROM ${BASE_IMAGE}
@@ -25,9 +23,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # Sort packages alphabetically for better readability and cache efficiency
 # Note: librivermax.so.1 (NVIDIA Rivermax SDK) is optional for UDP streaming
 # Install from https://developer.nvidia.com/networking/rivermax if needed
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     git \
     gstreamer1.0-libav \
@@ -48,9 +44,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     wget
 
 # Install other apt dependencies 
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt install -y \
+RUN  apt-get update && apt install -y \
         libvpx-dev \
         libx264-dev \
         libx265-dev \
@@ -98,14 +92,15 @@ COPY src/*.h ./
 COPY src/*.py ./
 COPY src/modules/ ./modules/
 
-# Build the main application
-RUN make clean && make CUDA_VER=${CUDA_VER}
 
 # Set library path and GStreamer plugin paths
 ENV LD_LIBRARY_PATH=/app/DeepStream-Yolo-Face/nvdsinfer_custom_impl_Yolo_face:${DS_SDK_ROOT}/lib:${LD_LIBRARY_PATH} \
     GST_PLUGIN_PATH=${DS_SDK_ROOT}/lib/gst-plugins:/usr/lib/x86_64-linux-gnu/gstreamer-1.0:${GST_PLUGIN_PATH} \
     GST_PLUGIN_SCANNER=/usr/lib/x86_64-linux-gnu/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner
 
+    
+# Build the main application
+#RUN make clean && make CUDA_VER=${CUDA_VER}
 # Create non-root user for security (optional, comment out if GPU access requires root)
 # RUN useradd --create-home --shell /bin/bash appuser && \
 #     chown -R appuser:appuser /app
