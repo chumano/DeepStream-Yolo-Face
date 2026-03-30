@@ -51,12 +51,13 @@ typedef struct {
 
 /** Display sink (nveglglessink / nv3dsink) */
 typedef struct {
-  gboolean disabled;       /**< TRUE → use fakesink instead */
-  guint    window_width;   /**< default 400 */
-  guint    window_height;  /**< default 400 */
-  gboolean sync;           /**< default FALSE */
-  gboolean async_sink;     /**< default FALSE */
-  gboolean qos;            /**< default FALSE */
+  gboolean disabled;        /**< TRUE → skip entire display branch (no nvosd, no nvsink) */
+  gboolean nvsink_disabled; /**< TRUE → keep nvosd/probe but replace nvsink with fakesink (headless) */
+  guint    window_width;    /**< default 400 */
+  guint    window_height;   /**< default 400 */
+  gboolean sync;            /**< default FALSE */
+  gboolean async_sink;      /**< default FALSE */
+  gboolean qos;             /**< default FALSE */
 } AppDisplayConfig;
 
 /** Shared queue element settings (queue_display and queue_app) */

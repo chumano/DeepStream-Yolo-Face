@@ -62,12 +62,13 @@ AppConfig app_config = {
 
   /* Display sink */
   .display = {
-    .disabled      = FALSE,
-    .window_width  = 400,
-    .window_height = 400,
-    .sync          = FALSE,
-    .async_sink    = FALSE,
-    .qos           = FALSE,
+    .disabled        = FALSE,
+    .nvsink_disabled = FALSE,
+    .window_width    = 400,
+    .window_height   = 400,
+    .sync            = FALSE,
+    .async_sink      = FALSE,
+    .qos             = FALSE,
   },
 
   /* Shared queue settings */
@@ -262,12 +263,13 @@ parse_config_file(const gchar *config_file, GError **error)
   GET_BOOL("osd", "draw-custom-bbox",app_config.osd.draw_custom_bbox);
 
   /* ── [display] ───────────────────────────────────────────── */
-  GET_BOOL("display", "disabled",      app_config.display.disabled);
-  GET_INT ("display", "window-width",  app_config.display.window_width);
-  GET_INT ("display", "window-height", app_config.display.window_height);
-  GET_BOOL("display", "sync",          app_config.display.sync);
-  GET_BOOL("display", "async",         app_config.display.async_sink);
-  GET_BOOL("display", "qos",           app_config.display.qos);
+  GET_BOOL("display", "disabled",        app_config.display.disabled);
+  GET_BOOL("display", "nvsink-disabled", app_config.display.nvsink_disabled);
+  GET_INT ("display", "window-width",    app_config.display.window_width);
+  GET_INT ("display", "window-height",   app_config.display.window_height);
+  GET_BOOL("display", "sync",            app_config.display.sync);
+  GET_BOOL("display", "async",           app_config.display.async_sink);
+  GET_BOOL("display", "qos",             app_config.display.qos);
 
   /* ── [queue] ─────────────────────────────────────────────── */
   GET_INT("queue", "max-size-buffers", app_config.queue.max_size_buffers);
@@ -615,8 +617,9 @@ static void print_app_config(void) {
     app_config.osd.qos ? "TRUE" : "FALSE",
     app_config.osd.draw_landmarks ? "TRUE" : "FALSE",
     app_config.osd.draw_custom_bbox ? "TRUE" : "FALSE");
-  g_print("\n  display: disabled=%s window_width=%u window_height=%u sync=%s async_sink=%s qos=%s",
+  g_print("\n  display: disabled=%s nvsink_disabled=%s window_width=%u window_height=%u sync=%s async_sink=%s qos=%s",
     app_config.display.disabled ? "TRUE" : "FALSE",
+    app_config.display.nvsink_disabled ? "TRUE" : "FALSE",
     app_config.display.window_width,
     app_config.display.window_height,
     app_config.display.sync ? "TRUE" : "FALSE",

@@ -30,7 +30,8 @@ typedef struct {
   GstElement *capsfilter;
   GstElement *tee;
 
-  /* Display branch (NULL when app_config.display.disabled == TRUE) */
+  /* Display branch (NULL when app_config.display.disabled == TRUE).
+   * When app_config.display.nvsink_disabled == TRUE, nvsink is a fakesink. */
   GstElement *queue_display;
   GstElement *nvosd;
   GstElement *nvsink;

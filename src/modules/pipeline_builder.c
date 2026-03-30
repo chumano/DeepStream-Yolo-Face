@@ -69,7 +69,28 @@ bus_call(GstBus *bus, GstMessage *message, gpointer user_data)
       gchar *debug;
       GError *error;
       gst_message_parse_warning(message, &error, &debug);
-      GST_WARNING("%s - %s", error->message, debug);
+      GstElement *src = GST_ELEMENT(GST_MESSAGE_SRC(message));
+      const gchar *src_name = GST_ELEMENT_NAME(src);
+      GQuark error_domain = error->domain;
+      GST_WARNING("src : %s, message error: %s - %s", src_name, error->message, debug);
+      // check if message error is GST_RESOURCE_ERROR_WRITE
+      if (error->code == GST_RESOURCE_ERROR_WRITE) {
+        GST_WARNING("GST_RESOURCE_ERROR_WRITE on %s: %s", src_name, error->message);
+        // For GStreamer resource errors (typically RTSP connection drops) try to
+        // restart only the affected source bin so the rest of the pipeline keeps
+        // running.  Any other error domain is treated as fatal.
+        if (ap && ap->pipeline) {
+          GstElement *src_bin = find_toplevel_source_bin(src, ap->pipeline);
+          if (src_bin) {
+            GST_WARNING("RTSP resource error on %s — restarting source bin",
+                        GST_ELEMENT_NAME(src_bin));
+            gst_element_set_state(src_bin, GST_STATE_NULL);
+            gst_element_set_state(src_bin, GST_STATE_PLAYING);
+            gst_object_unref(src_bin);
+          }
+        }
+      }
+
       g_free(debug);
       g_error_free(error);
       break;
@@ -588,28 +609,40 @@ create_app_pipeline(GMainLoop *loop, GCallback appsink_callback,
       g_object_set(G_OBJECT(ap->nvosd), "gpu_id", app_config.gpu_id, NULL);
 
     // display sink
-    if (app_config.jetson) {
+    if (app_config.display.nvsink_disabled) {
+      ap->nvsink = gst_element_factory_make("fakesink", "nvsink_fake");
+      if (!ap->nvsink || !gst_bin_add(GST_BIN(ap->pipeline), ap->nvsink)) {
+        g_printerr("ERROR - Failed to create fakesink (nvsink disabled)\n");
+        goto fail;
+      }
+      g_object_set(G_OBJECT(ap->nvsink), "async", FALSE, "sync", FALSE, NULL);
+    } else if (app_config.jetson) {
       ap->nvsink = gst_element_factory_make("nv3dsink", "nv3dsink");
       if (!ap->nvsink || !gst_bin_add(GST_BIN(ap->pipeline), ap->nvsink)) {
         g_printerr("ERROR - Failed to create nv3dsink\n");
         goto fail;
       }
+      g_object_set(G_OBJECT(ap->nvsink),
+                   "async", (gint) app_config.display.async_sink,
+                   "sync", (gint) app_config.display.sync,
+                   "qos", (gint) app_config.display.qos,
+                   "window-width",  app_config.display.window_width,
+                   "window-height", app_config.display.window_height,
+                   NULL);
     } else {
       ap->nvsink = gst_element_factory_make("nveglglessink", "nveglglessink");
       if (!ap->nvsink || !gst_bin_add(GST_BIN(ap->pipeline), ap->nvsink)) {
         g_printerr("ERROR - Failed to create nveglglessink\n");
         goto fail;
       }
+      g_object_set(G_OBJECT(ap->nvsink),
+                   "async", (gint) app_config.display.async_sink,
+                   "sync", (gint) app_config.display.sync,
+                   "qos", (gint) app_config.display.qos,
+                   "window-width",  app_config.display.window_width,
+                   "window-height", app_config.display.window_height,
+                   NULL);
     }
-    g_object_set(G_OBJECT(ap->nvsink),
-                 "async", (gint) app_config.display.async_sink,
-                 "sync", (gint) app_config.display.sync,
-                 "qos", (gint) app_config.display.qos,
-                 NULL);
-    g_object_set(G_OBJECT(ap->nvsink),
-                 "window-width",  app_config.display.window_width,
-                 "window-height", app_config.display.window_height,
-                 NULL);
   }
 
   // ---------------------------------------------------------------------------
